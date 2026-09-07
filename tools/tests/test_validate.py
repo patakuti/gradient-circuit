@@ -17,6 +17,7 @@ def _make_doc(count: int = 3337, width: float = 8.5) -> dict:
     curvature = np.full(count, 1.0 / radius)
     return {
         "length": 3337.0,
+        "count": count,
         "samples": {
             "s": s.tolist(),
             "x": x.tolist(),
@@ -52,3 +53,16 @@ def test_nan_is_detected():
     results = run_all(doc, closure_gap=0.5)
     by_id = {r.id: r for r in results}
     assert not by_id[6].passed
+
+
+def test_mismatched_array_length_is_detected():
+    """Regression guard for the real bug: widthLeft/widthRight computed on
+    a different sample grid than x/y/z/s, exported with a mismatched
+    length that only the web loader's check caught."""
+    doc = _make_doc()
+    doc["samples"]["widthLeft"] = doc["samples"]["widthLeft"] + [8.0] * 14
+    doc["samples"]["widthRight"] = doc["samples"]["widthRight"] + [8.0] * 14
+    results = run_all(doc, closure_gap=0.5)
+    by_id = {r.id: r for r in results}
+    assert not by_id[7].passed
+    assert by_id[1].passed  # unrelated checks still run
