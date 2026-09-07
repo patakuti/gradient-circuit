@@ -272,7 +272,15 @@ def generate_centerline(
         "xyz": final_xyz,
         "xyz_presmooth": candidate,
         "xyz_smoothed_preresample": smoothed,
+        "ref_s": ref_s,
         "ref_xyz": ref_xyz,
+        # d_buckets/z_buckets are indexed by `ref_s`, NOT `final_s`: they are
+        # built during projection, before reparameterize_uniform changes the
+        # sample count (measured: 3285 vs 3271 on real data -- these two
+        # grids are close but not identical). Anything derived from them
+        # (e.g. width.py's per-sample arrays) must be interpolated from
+        # `ref_s` onto `final_s`/`s` before being exported alongside x/y/z;
+        # see cli.py.
         "d_buckets": d_buckets,
         "z_buckets": z_buckets,
         "closure_gap": gap,

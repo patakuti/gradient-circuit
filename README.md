@@ -29,7 +29,15 @@ Python 3.12 以上、[uv](https://docs.astral.sh/uv/) が必要です。
 
 ### シミュレータ (web/)
 
-準備中(P2 完了後に記載)。
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Node.js 18 以上が必要です。`npm run dev` 後、表示された URL(既定 http://localhost:5173/)をブラウザで開きます。現時点(P2)では空の Three.js シーンが表示され、コースデータの読込結果がブラウザのコンソールに出力されます(周回走行は P4 で実装予定)。
+
+`npm run build` で `web/dist/` に本番ビルドを出力します。`npm run lint` で ESLint を実行します(`sim/` 配下から `three` を import すると検出されます)。
 
 ## コースデータの再生成
 

@@ -1,13 +1,18 @@
 """Acceptance-criteria checks for generated course data.
 
-Design ref: 02_design.md section 7 (course-data criteria #1-#6).
+Design ref: 02_design.md section 7 (course-data criteria #1-#7).
 
-Criterion #7 (width clamp rate < 5%) was dropped after measuring real
-lap-to-lap lateral scatter on the 2026 Monaco GP race data: median raw
-full-width scatter is 0.16 m, so >96% of samples hit the floor clamp
-regardless of calibration -- Monaco has essentially one viable line almost
-everywhere, and that isn't a calibration defect. Width plausibility is
-covered by criterion #3 (full width in [8, 12] m) instead. See design 4.5.
+The original criterion #7 (width clamp rate < 5%) was dropped after
+measuring real lap-to-lap lateral scatter on the 2026 Monaco GP race data:
+median raw full-width scatter is 0.16 m, so >96% of samples hit the floor
+clamp regardless of calibration -- Monaco has essentially one viable line
+almost everywhere, and that isn't a calibration defect. Width plausibility
+is covered by criterion #3 (full width in [8, 12] m) instead (design 4.5).
+#7 was reused for a sample-array-length check (design 5.2 invariant #2)
+after a real bug: width_left/width_right were briefly computed on a
+different sample grid than x/y/z/s and exported with a mismatched length
+that only the web loader's (stricter) check caught -- this closes that gap
+on the Python side too.
 """
 
 from __future__ import annotations
@@ -48,6 +53,22 @@ def run_all(doc: dict, closure_gap: float) -> list[CheckResult]:
     curvature = np.array(samples["curvature"])
 
     results = []
+
+    # Regression guard: width_left/width_right were once computed on a
+    # different (pre-reparameterize_uniform) sample grid than x/y/z/s,
+    # producing arrays of a different length that were silently exported
+    # side by side -- caught only by the web loader's stricter check, not
+    # here. Every sample array must match `count` (design 5.2 invariant #2).
+    count = doc["count"]
+    lengths = {name: len(samples[name]) for name in samples}
+    mismatched = {name: n for name, n in lengths.items() if n != count}
+    results.append(CheckResult(
+        7, "sample array lengths", not mismatched,
+        f"count={count}; " + (
+            "all arrays match" if not mismatched
+            else f"mismatched: {mismatched}"
+        ),
+    ))
 
     length = doc["length"]
     length_dev = abs(length - LENGTH_TARGET) / LENGTH_TARGET

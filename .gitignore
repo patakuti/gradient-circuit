@@ -10,6 +10,7 @@ tools/.fastf1cache/
 
 node_modules/
 web/dist/
+web/*.tsbuildinfo
 
 .DS_Store
 

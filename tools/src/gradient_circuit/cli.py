@@ -36,6 +36,16 @@ DEFAULT_WIDTH_K = 1.6
 DEFAULT_WIDTH_MARGIN = 0.5
 
 
+def interp_periodic(target_s: np.ndarray, src_s: np.ndarray, src_values: np.ndarray, length: float) -> np.ndarray:
+    """Linearly interpolate a periodic (closed-loop) signal from one
+    arc-length grid onto another, wrapping correctly across the s=0/length
+    seam. Both grids must be increasing and cover approximately [0, length).
+    """
+    ext_s = np.concatenate([src_s - length, src_s, src_s + length])
+    ext_values = np.concatenate([src_values, src_values, src_values])
+    return np.interp(target_s, ext_s, ext_values)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gradient-circuit")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -83,7 +93,14 @@ def _run_generate(args: argparse.Namespace) -> int:
     print("Estimating width...")
     half_left_raw, half_right_raw, _ = raw_half_widths(cl["d_buckets"])
     calib = WidthCalibration(k=args.width_k, margin=args.width_margin)
-    width_left, width_right, clamp_stats = apply_calibration(half_left_raw, half_right_raw, calib)
+    width_left_ref, width_right_ref, clamp_stats = apply_calibration(half_left_raw, half_right_raw, calib)
+    # d_buckets/z_buckets (and therefore width_left_ref/width_right_ref) are
+    # indexed by cl["ref_s"], the grid *before* reparameterize_uniform --
+    # not by cl["s"], the final exported grid (measured to differ by 14
+    # samples on real data). Interpolate onto the final grid so every
+    # exported sample array lines up with the same s.
+    width_left = interp_periodic(s, cl["ref_s"], width_left_ref, cl["length"])
+    width_right = interp_periodic(s, cl["ref_s"], width_right_ref, cl["length"])
     print(f"  -> half_clamp_rate={clamp_stats['half_clamp_rate']*100:.2f}% "
           f"full_clamp_rate={clamp_stats['full_clamp_rate']*100:.2f}%")
 
