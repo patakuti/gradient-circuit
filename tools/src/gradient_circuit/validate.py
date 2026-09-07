@@ -1,0 +1,107 @@
+"""Acceptance-criteria checks for generated course data.
+
+Design ref: 02_design.md section 7 (course-data criteria #1-#6).
+
+Criterion #7 (width clamp rate < 5%) was dropped after measuring real
+lap-to-lap lateral scatter on the 2026 Monaco GP race data: median raw
+full-width scatter is 0.16 m, so >96% of samples hit the floor clamp
+regardless of calibration -- Monaco has essentially one viable line almost
+everywhere, and that isn't a calibration defect. Width plausibility is
+covered by criterion #3 (full width in [8, 12] m) instead. See design 4.5.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+
+LENGTH_TARGET = 3337.0
+LENGTH_TOLERANCE = 0.03
+
+ELEVATION_TARGET = 40.0
+ELEVATION_TOLERANCE = 0.15
+
+WIDTH_MIN = 8.0
+WIDTH_MAX = 12.0
+
+CLOSURE_MAX = 1.0
+
+CURVATURE_JUMP_MAX = 0.05
+
+
+@dataclass
+class CheckResult:
+    id: int
+    name: str
+    passed: bool
+    detail: str
+
+
+def run_all(doc: dict, closure_gap: float) -> list[CheckResult]:
+    samples = doc["samples"]
+    x = np.array(samples["x"])
+    y = np.array(samples["y"])
+    z = np.array(samples["z"])
+    width_left = np.array(samples["widthLeft"])
+    width_right = np.array(samples["widthRight"])
+    curvature = np.array(samples["curvature"])
+
+    results = []
+
+    length = doc["length"]
+    length_dev = abs(length - LENGTH_TARGET) / LENGTH_TARGET
+    results.append(CheckResult(
+        1, "course length", length_dev <= LENGTH_TOLERANCE,
+        f"length={length:.2f}m target={LENGTH_TARGET}m deviation={length_dev*100:.2f}% (max {LENGTH_TOLERANCE*100:.0f}%)",
+    ))
+
+    elevation_delta = float(z.max() - z.min())
+    elev_dev = abs(elevation_delta - ELEVATION_TARGET) / ELEVATION_TARGET
+    results.append(CheckResult(
+        2, "elevation delta", elev_dev <= ELEVATION_TOLERANCE,
+        f"delta={elevation_delta:.2f}m target={ELEVATION_TARGET}m deviation={elev_dev*100:.2f}% (max {ELEVATION_TOLERANCE*100:.0f}%)",
+    ))
+
+    full_width = width_left + width_right
+    # Epsilon guards against floating-point summation noise at the clamp
+    # boundary (width.py re-clamps after smoothing, but a few ULPs of drift
+    # can still remain, e.g. 8.0 - 4e-15) -- the design's [8, 12] m target
+    # is a physical-realism bound, not a bit-exact constraint.
+    eps = 1e-6
+    width_ok = bool(np.all((full_width >= WIDTH_MIN - eps) & (full_width <= WIDTH_MAX + eps)))
+    results.append(CheckResult(
+        3, "full width range", width_ok,
+        f"min={full_width.min():.2f}m max={full_width.max():.2f}m target=[{WIDTH_MIN},{WIDTH_MAX}]m",
+    ))
+
+    results.append(CheckResult(
+        4, "loop closure", closure_gap < CLOSURE_MAX,
+        f"gap={closure_gap:.4f}m (max {CLOSURE_MAX}m)",
+    ))
+
+    curv_diff = np.abs(np.diff(np.concatenate([curvature, curvature[:1]])))
+    max_jump = float(curv_diff.max())
+    results.append(CheckResult(
+        5, "curvature continuity", max_jump < CURVATURE_JUMP_MAX,
+        f"max adjacent jump={max_jump:.4f} 1/m (max {CURVATURE_JUMP_MAX} 1/m)",
+    ))
+
+    all_arrays = [x, y, z, width_left, width_right, curvature,
+                  np.array(samples["grade"]), np.array(samples["bank"])]
+    has_nan_inf = any(not np.all(np.isfinite(a)) for a in all_arrays)
+    results.append(CheckResult(
+        6, "no NaN/Inf", not has_nan_inf, "all sample arrays finite" if not has_nan_inf else "NaN/Inf found",
+    ))
+
+    return results
+
+
+def print_report(results: list[CheckResult]) -> bool:
+    all_passed = True
+    for r in results:
+        status = "PASS" if r.passed else "FAIL"
+        if not r.passed:
+            all_passed = False
+        print(f"[{status}] #{r.id} {r.name}: {r.detail}")
+    return all_passed

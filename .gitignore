@@ -12,3 +12,7 @@ node_modules/
 web/dist/
 
 .DS_Store
+
+.claude/
+.pytest_cache/
+*.egg-info/
