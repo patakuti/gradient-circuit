@@ -55,3 +55,22 @@ export function normalize(a: Vec3): Vec3 {
 export function lerp(a: Vec3, b: Vec3, t: number): Vec3 {
   return vec3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
 }
+
+/**
+ * Rotate `v` by `angle` radians around unit axis `axis` (Rodrigues' formula).
+ * Used to apply bank/cant roll to the track's "up" vector (design 6.2).
+ * Currently a no-op in practice since bank is always 0 (design 4.6), but
+ * kept as a real implementation so a future non-zero bank source needs no
+ * changes here.
+ */
+export function rotateAroundAxis(v: Vec3, axis: Vec3, angle: number): Vec3 {
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const k = axis;
+  const kCrossV = cross(k, v);
+  const kDotV = dot(k, v);
+  return add(
+    add(scale(v, cos), scale(kCrossV, sin)),
+    scale(k, kDotV * (1 - cos)),
+  );
+}
