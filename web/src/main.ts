@@ -3,10 +3,9 @@
  * root. Per design 6.1, this file only wires modules together -- no
  * simulation or rendering logic of its own.
  *
- * P4 status: driving is live -- fixed-timestep sim/vehicle.ts integration,
- * slider/keyboard throttle, and a temporary chase camera + readout for
- * visual verification (design 03_plan.md P4). The real camera rigs (P5)
- * and polished HUD (P6) replace the temporary bits below.
+ * P5 status: two camera rigs (chase, cockpit) are wired through
+ * CameraManager, switchable with the `C` key (design 03_plan.md P5). The
+ * polished HUD (P6) still needs to add a camera-select control alongside it.
  */
 
 import * as THREE from "three";
@@ -18,17 +17,16 @@ import { setupEnvironment } from "./render/environment";
 import { stepVehicle, type VehicleState } from "./sim/vehicle";
 import { DEFAULT_VEHICLE_PARAMS } from "./sim/vehicleParams";
 import { SliderThrottle, KeyboardThrottle, CombinedThrottle } from "./sim/input";
-import { vec3, add, scale, lerp, normalize, type Vec3 } from "./sim/vec";
+import { normalize, cross } from "./sim/vec";
+import { CameraManager } from "./camera/manager";
+import { ChaseRig } from "./camera/chaseRig";
+import { CockpitRig } from "./camera/cockpitRig";
+import type { VehiclePose } from "./camera/types";
 
 const COURSE_URL = "/course/monaco.json";
 const FIXED_DT = 1 / 120; // design 6.4: physics runs at a fixed timestep
 const MAX_FRAME_DT = 0.1; // clamp huge dt after e.g. a backgrounded tab
-
-// Temporary chase-camera numbers, matching design 6.6's planned chaseRig
-// defaults so P5 can lift this straight into camera/chaseRig.ts.
-const CHASE_BACK_M = 7.5;
-const CHASE_UP_M = 2.8;
-const CHASE_SMOOTH_K = 6.0;
+const LOOKAHEAD_M = 25; // design 6.6: cockpitRig's corner look-ahead distance
 
 function createScene(): { scene: THREE.Scene; camera: THREE.PerspectiveCamera; renderer: THREE.WebGLRenderer } {
   const scene = new THREE.Scene();
@@ -58,9 +56,9 @@ function createScene(): { scene: THREE.Scene; camera: THREE.PerspectiveCamera; r
 }
 
 /**
- * Temporary throttle slider + speed/lap readout, styled just enough to be
- * usable for P4 verification. Replaced by the real ui/controls.ts and
- * ui/hud.ts in P6.
+ * Temporary throttle slider + speed/lap/camera readout, styled just enough
+ * to be usable for P4/P5 verification. Replaced by the real ui/controls.ts
+ * and ui/hud.ts in P6.
  */
 function createTemporaryOverlay(): { slider: HTMLInputElement; readout: HTMLDivElement } {
   const overlay = document.createElement("div");
@@ -83,13 +81,29 @@ function createTemporaryOverlay(): { slider: HTMLInputElement; readout: HTMLDivE
   sliderRow.appendChild(slider);
   overlay.appendChild(sliderRow);
 
+  const hint = document.createElement("div");
+  hint.style.opacity = "0.7";
+  hint.textContent = "[C] switch camera";
+  overlay.appendChild(hint);
+
   document.body.appendChild(overlay);
   return { slider, readout };
 }
 
-function poseAt(track: Track, s: number): { position: Vec3; tangent: Vec3; up: Vec3 } {
-  const sample = track.sampleAt(s);
-  return { position: sample.position, tangent: sample.tangent, up: sample.up };
+function poseFor(track: Track, state: VehicleState): VehiclePose {
+  const sample = track.sampleAt(state.s);
+  const lookahead = track.sampleAt(state.s + LOOKAHEAD_M).position;
+  const right = normalize(cross(sample.tangent, sample.up));
+  return {
+    position: sample.position,
+    forward: sample.tangent,
+    up: sample.up,
+    right,
+    lookahead,
+    speed: state.speed,
+    s: state.s,
+    lap: state.lap,
+  };
 }
 
 async function main() {
@@ -114,15 +128,8 @@ async function main() {
 
   let vehicle: VehicleState = { s: 0, speed: 0, lap: 0, lateralOffset: 0 };
 
-  // Camera starts directly behind the car at the start/finish line; the
-  // fixed-timestep loop below then keeps it chasing smoothly.
-  const startPose = poseAt(track, vehicle.s);
-  const startCameraPos = add(
-    startPose.position,
-    add(scale(startPose.tangent, -CHASE_BACK_M), scale(startPose.up, CHASE_UP_M)),
-  );
-  camera.position.set(startCameraPos.x, startCameraPos.y, startCameraPos.z);
-  camera.lookAt(startPose.position.x, startPose.position.y, startPose.position.z);
+  const cameraManager = new CameraManager([new ChaseRig(), new CockpitRig()]);
+  cameraManager.init(camera, poseFor(track, vehicle));
 
   let tPrev = performance.now();
   let accumulator = 0;
@@ -145,20 +152,12 @@ async function main() {
       console.log(`[vehicle] lap ${vehicle.lap} complete`);
     }
 
-    const pose = poseAt(track, vehicle.s);
-    const chaseTarget = add(pose.position, add(scale(pose.tangent, -CHASE_BACK_M), scale(pose.up, CHASE_UP_M)));
-    const alpha = 1 - Math.exp(-CHASE_SMOOTH_K * frameDt);
-    const smoothed = lerp(
-      vec3(camera.position.x, camera.position.y, camera.position.z),
-      chaseTarget,
-      alpha,
-    );
-    camera.position.set(smoothed.x, smoothed.y, smoothed.z);
-    const lookTarget = add(pose.position, scale(normalize(pose.tangent), 5));
-    camera.lookAt(lookTarget.x, lookTarget.y, lookTarget.z);
-    camera.up.set(pose.up.x, pose.up.y, pose.up.z);
+    const pose = poseFor(track, vehicle);
+    cameraManager.update(camera, pose, frameDt);
 
-    readout.textContent = `speed: ${(vehicle.speed * 3.6).toFixed(0)} km/h  lap: ${vehicle.lap}`;
+    readout.textContent =
+      `speed: ${(vehicle.speed * 3.6).toFixed(0)} km/h  lap: ${vehicle.lap}  ` +
+      `camera: ${cameraManager.current.label}`;
 
     renderer.render(scene, camera);
   }
