@@ -1,0 +1,14 @@
+01_requirements.md
+02_design.md
+03_plan.md
+CLAUDE.md
+
+__pycache__/
+*.pyc
+.venv/
+tools/.fastf1cache/
+
+node_modules/
+web/dist/
+
+.DS_Store
