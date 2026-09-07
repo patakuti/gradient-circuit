@@ -3,9 +3,9 @@
  * root. Per design 6.1, this file only wires modules together -- no
  * simulation or rendering logic of its own.
  *
- * P5 status: two camera rigs (chase, cockpit) are wired through
- * CameraManager, switchable with the `C` key (design 03_plan.md P5). The
- * polished HUD (P6) still needs to add a camera-select control alongside it.
+ * P6 status: the real HUD/controls (ui/hud.ts, ui/controls.ts) replace the
+ * P4/P5 temporary overlay. `?debug=1` adds the s/curvature/width/fps panel
+ * (design 03_plan.md P6).
  */
 
 import * as THREE from "three";
@@ -22,11 +22,15 @@ import { CameraManager } from "./camera/manager";
 import { ChaseRig } from "./camera/chaseRig";
 import { CockpitRig } from "./camera/cockpitRig";
 import type { VehiclePose } from "./camera/types";
+import { Hud } from "./ui/hud";
+import { createControls } from "./ui/controls";
 
 const COURSE_URL = "/course/monaco.json";
 const FIXED_DT = 1 / 120; // design 6.4: physics runs at a fixed timestep
 const MAX_FRAME_DT = 0.1; // clamp huge dt after e.g. a backgrounded tab
 const LOOKAHEAD_M = 25; // design 6.6: cockpitRig's corner look-ahead distance
+
+const DEBUG = new URLSearchParams(window.location.search).get("debug") === "1";
 
 function createScene(): { scene: THREE.Scene; camera: THREE.PerspectiveCamera; renderer: THREE.WebGLRenderer } {
   const scene = new THREE.Scene();
@@ -53,41 +57,6 @@ function createScene(): { scene: THREE.Scene; camera: THREE.PerspectiveCamera; r
   });
 
   return { scene, camera, renderer };
-}
-
-/**
- * Temporary throttle slider + speed/lap/camera readout, styled just enough
- * to be usable for P4/P5 verification. Replaced by the real ui/controls.ts
- * and ui/hud.ts in P6.
- */
-function createTemporaryOverlay(): { slider: HTMLInputElement; readout: HTMLDivElement } {
-  const overlay = document.createElement("div");
-  overlay.style.cssText =
-    "position:fixed;left:12px;bottom:12px;padding:8px 12px;background:rgba(0,0,0,0.55);" +
-    "color:#fff;font:13px monospace;border-radius:6px;display:flex;flex-direction:column;gap:6px;z-index:10;";
-
-  const readout = document.createElement("div");
-  readout.textContent = "speed: 0 km/h  lap: 0";
-  overlay.appendChild(readout);
-
-  const sliderRow = document.createElement("label");
-  sliderRow.style.cssText = "display:flex;align-items:center;gap:8px;";
-  sliderRow.textContent = "throttle";
-  const slider = document.createElement("input");
-  slider.type = "range";
-  slider.min = "0";
-  slider.max = "100";
-  slider.value = "0";
-  sliderRow.appendChild(slider);
-  overlay.appendChild(sliderRow);
-
-  const hint = document.createElement("div");
-  hint.style.opacity = "0.7";
-  hint.textContent = "[C] switch camera";
-  overlay.appendChild(hint);
-
-  document.body.appendChild(overlay);
-  return { slider, readout };
 }
 
 function poseFor(track: Track, state: VehicleState): VehiclePose {
@@ -121,18 +90,23 @@ async function main() {
   scene.add(buildTrackMesh(track));
   scene.add(buildBarriers(track));
 
-  const { slider, readout } = createTemporaryOverlay();
-  const sliderThrottle = new SliderThrottle(slider);
-  const keyboardThrottle = new KeyboardThrottle(sliderThrottle);
-  const throttle = new CombinedThrottle([sliderThrottle, keyboardThrottle]);
-
   let vehicle: VehicleState = { s: 0, speed: 0, lap: 0, lateralOffset: 0 };
 
   const cameraManager = new CameraManager([new ChaseRig(), new CockpitRig()]);
   cameraManager.init(camera, poseFor(track, vehicle));
 
+  const controls = createControls(document.body, cameraManager.list(), (id) => cameraManager.select(id));
+  const hud = new Hud(document.body, DEBUG);
+
+  const sliderThrottle = new SliderThrottle(controls.slider);
+  const keyboardThrottle = new KeyboardThrottle(sliderThrottle);
+  const throttle = new CombinedThrottle([sliderThrottle, keyboardThrottle]);
+
   let tPrev = performance.now();
   let accumulator = 0;
+  let simTime = 0;
+  let lastLapStartTime = 0;
+  let lastLapTimeS: number | null = null;
 
   function animate() {
     requestAnimationFrame(animate);
@@ -147,17 +121,40 @@ async function main() {
       const grade = track.sampleAt(vehicle.s).grade;
       vehicle = stepVehicle(vehicle, throttle.read(), grade, FIXED_DT, DEFAULT_VEHICLE_PARAMS, track.length);
       accumulator -= FIXED_DT;
+      simTime += FIXED_DT;
     }
     if (vehicle.lap !== lapBefore) {
-      console.log(`[vehicle] lap ${vehicle.lap} complete`);
+      lastLapTimeS = simTime - lastLapStartTime;
+      lastLapStartTime = simTime;
+      console.log(`[vehicle] lap ${vehicle.lap} complete in ${lastLapTimeS.toFixed(3)}s`);
     }
 
     const pose = poseFor(track, vehicle);
     cameraManager.update(camera, pose, frameDt);
+    controls.setActiveCamera(cameraManager.current.id);
 
-    readout.textContent =
-      `speed: ${(vehicle.speed * 3.6).toFixed(0)} km/h  lap: ${vehicle.lap}  ` +
-      `camera: ${cameraManager.current.label}`;
+    const sample = track.sampleAt(vehicle.s);
+    hud.update(
+      {
+        speedKmh: vehicle.speed * 3.6,
+        throttlePercent: throttle.read() * 100,
+        elevationM: pose.position.y,
+        gradePercent: Math.sin(sample.grade) * 100,
+        lap: vehicle.lap,
+        lapDistanceM: vehicle.s,
+        lastLapTimeS,
+        cameraLabel: cameraManager.current.label,
+      },
+      DEBUG
+        ? {
+            s: sample.s,
+            curvature: sample.curvature,
+            widthLeft: sample.widthLeft,
+            widthRight: sample.widthRight,
+            fps: frameDt > 0 ? 1 / frameDt : 0,
+          }
+        : undefined,
+    );
 
     renderer.render(scene, camera);
   }

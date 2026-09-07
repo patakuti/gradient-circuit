@@ -50,7 +50,7 @@ uv run gradient-circuit generate --out ../web/public/course/monaco.json
 
 - セッションは既定で自動選択されます(現在年から遡り、位置データが取得できる最新のモナコ GP 決勝)。`--year 2026` のように明示指定も可能です。
 - 初回実行時は FastF1 が API からデータを取得するため数分かかります。取得結果は `tools/.fastf1cache/`(Git 管理外)にキャッシュされます。
-- 実行後、コースデータが `02_design.md` §7 の受け入れ基準(全長・標高差・道幅・閉合誤差・曲率連続性・欠損値)を満たすか自動検証し、結果をコンソールに出力します。
+- 実行後、コースデータが以下の受け入れ基準を満たすか自動検証し、結果をコンソールに出力します: 全長 3337m±3%、標高差 40m±15%、全幅 8〜12m、ループ閉合誤差 <1.0m、曲率の連続性、欠損値なし、サンプル配列長の整合性。
 
 ### テスト
 
@@ -60,6 +60,16 @@ uv run pytest
 ```
 
 FastF1 への通信を伴わない、幾何計算(曲率符号・弧長リサンプル・道幅クランプ・受け入れ基準判定)のユニットテストです。
+
+## 別エンジンへの移植について
+
+`web/public/course/monaco.json` は Three.js に固有の情報を一切含まない、エンジン非依存の中間形式(`gradient-circuit/course@1`)です。座標は Z 上・右手系(Three.js の Y 上への変換は `web/src/course/loader.ts` が担当)。この JSON をそのまま読み込めば、Unity など別エンジンでも同じコースデータを利用できます。
+
+| 再実装が必要 | そのまま流用可 |
+|---|---|
+| `web/src/render/*`(Three.js 固有の描画) | `web/public/course/monaco.json`(データそのもの) |
+| `web/src/ui/*`(DOM 固有の HUD/操作) | `web/src/sim/track.ts` / `sim/vehicle.ts` のアルゴリズム(純粋な数式のみ、`three` 非依存。ESLint で機械的に強制) |
+| `web/src/camera/*Rig`(カメラ API 固有) | `web/src/camera/types.ts` のインタフェース定義 |
 
 ## ライセンス
 

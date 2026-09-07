@@ -26,6 +26,11 @@ export class CameraManager {
     return this.rigs[this.index];
   }
 
+  /** Registered rigs as plain {id, label} pairs, for e.g. a UI select control. */
+  list(): { id: string; label: string }[] {
+    return this.rigs.map((rig) => ({ id: rig.id, label: rig.label }));
+  }
+
   /** Positions the camera for the first time, before the render loop starts. */
   init(camera: PerspectiveCamera, pose: VehiclePose): void {
     this.lastPose = pose;
@@ -36,6 +41,14 @@ export class CameraManager {
   update(camera: PerspectiveCamera, pose: VehiclePose, dt: number): void {
     this.lastPose = pose;
     this.current.update(camera, pose, dt);
+  }
+
+  /** Explicitly select a rig by id, e.g. from a UI control. No-op if already active or unknown. */
+  select(id: string): void {
+    const idx = this.rigs.findIndex((rig) => rig.id === id);
+    if (idx === -1 || idx === this.index || !this.lastPose) return;
+    this.index = idx;
+    this.current.reset(this.lastPose);
   }
 
   private handleKeyDown = (event: KeyboardEvent): void => {
