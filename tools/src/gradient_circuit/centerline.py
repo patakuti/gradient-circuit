@@ -7,12 +7,16 @@ Pipeline:
    resampled to 1.0 m arc-length spacing.
 2. Project every clean lap's points onto the reference line to get, for
    each point, a longitudinal position `s` and signed lateral offset `d`.
-   Points with |d| beyond MAX_PLAUSIBLE_OFFSET are rejected outright (see
-   that constant's docstring): measured on the 2026 Monaco GP race data,
-   GPS position dropouts (e.g. in the tunnel) produce a smoothly-growing
-   dead-reckoning drift reaching over 1000 m of apparent lateral offset in
-   19 of 80 clean laps -- these are not real driving lines and must not
-   reach the median/percentile statistics below.
+   Each lap is walked sequentially (a car cannot teleport within a lap),
+   anchoring each point's search to a small window around the *previous*
+   point's own resolved position, not a blind global nearest-XY search --
+   see `project_laps`'s docstring for why (grade-separated crossovers,
+   e.g. Suzuka's figure-eight). Points with |d| beyond MAX_PLAUSIBLE_OFFSET
+   are rejected outright (see that constant's docstring): measured on the
+   2026 Monaco GP race data, GPS position dropouts (e.g. in the tunnel)
+   produce a smoothly-growing dead-reckoning drift reaching over 1000 m of
+   apparent lateral offset in 19 of 80 clean laps -- these are not real
+   driving lines and must not reach the median/percentile statistics below.
 3. At each reference sample, take the median `d` and median `Z` across all
    laps that projected near it (robust to off-line excursions/contact).
 4. Reconstruct the centerline as reference_line(s) + normal(s) * d_med(s)
@@ -52,6 +56,48 @@ CLOSURE_TOLERANCE = DS  # design 4.4 step 7: gap must be < 1.0 m
 # half-width bound (7 m, section 4.5) -- no genuine on-track (or slightly
 # off-line) point should exceed it, while the drift tail clearly does.
 MAX_PLAUSIBLE_OFFSET = 12.0
+
+# `project_laps` local search: once a point's search is anchored to a
+# nearby known-good reference index (the previous point's own resolved
+# position -- see that function's docstring), this margin is added on top
+# of the step's actual Distance-channel delta to size the search window.
+# Generous above plausible lateral deviation + per-step GPS/Distance noise
+# (order of a few m between consecutive samples), while remaining far
+# smaller than the arc-length gap between a course's self-crossing
+# branches (~thousands of m) -- this is what makes the window immune to
+# the crossover ambiguity that motivated it.
+#
+# A single per-lap constant alignment offset (course-s minus a lap's
+# cumulative `Distance`) was tried and rejected: different laps take
+# different racing lines through corners, so a lap's cumulative path
+# length drifts from the reference line's arc length by tens of meters
+# over the course of a lap (measured on real Suzuka data: up to ~25 m of
+# drift within a single 200 m stretch, for a lap other than the one the
+# reference line itself was built from) -- nowhere near precise enough to
+# anchor a single lap-wide window against. Per-step sequential tracking
+# sidesteps this: only the *local* Distance delta between consecutive
+# samples needs to be accurate, and that holds regardless of a lap's
+# overall racing line.
+LOCAL_SEARCH_MARGIN_M = 15.0
+
+# Reject a point's Z (elevation) contribution when it implies a grade
+# steeper than this versus the lap's own last trustworthy Z, at that
+# step's actual Distance delta. Real F1 tracks stay well under this even
+# at their steepest (measured on real data: normal grade is within a few
+# percent, occasionally ~13% at a sharp elevation change) -- this is not a
+# matching/bucketing problem (see project_laps' docstring history): GPS
+# altitude is markedly less accurate than horizontal position, and grade-
+# separated crossovers (bridges/underpasses) are exactly the kind of
+# structure that causes transient multipath/signal-blockage altitude
+# glitches. Measured directly on 2026 Suzuka race data: multiple, mutually
+# unrelated laps (different drivers/lap numbers) show an isolated 1-2
+# sample Z spike of 10-20 m at the *same* XY location near each of
+# Suzuka's two crossover approaches, each implying >100% instantaneous
+# grade, sandwiched between otherwise-flat, physically ordinary samples
+# immediately before and after -- the signature of a sensor glitch, not a
+# real elevation feature (a real one would show a sustained, one-directional
+# grade over many samples, not an isolated spike that reverses immediately).
+MAX_PLAUSIBLE_GRADE = 0.15
 
 
 @dataclass
@@ -145,55 +191,144 @@ def compute_tangent_normal(xyz: np.ndarray, closed: bool = True) -> tuple[np.nda
     return tangent, normal
 
 
+def _project_point_to_window(
+    xy_point: np.ndarray, center_i: int, window_samples: int,
+    ref_s: np.ndarray, ref_xyz: np.ndarray, ref_normal: np.ndarray,
+) -> tuple[float, float]:
+    """Nearest-segment projection of one XY point, searching only reference
+    segments within `window_samples` of `center_i` (periodic wrap). Returns
+    (s, signed lateral offset d)."""
+    n = len(ref_s)
+    length = ref_s[-1] + DS
+    best_d, best_s, best_dist2 = None, None, None
+    for offset in range(-window_samples, window_samples + 1):
+        a = (center_i + offset) % n
+        b = (a + 1) % n
+        seg_vec = ref_xyz[b, :2] - ref_xyz[a, :2]
+        seg_len2 = float(seg_vec @ seg_vec)
+        if seg_len2 < 1e-9:
+            continue
+        t = float((xy_point - ref_xyz[a, :2]) @ seg_vec / seg_len2)
+        t = min(1.0, max(0.0, t))
+        proj = ref_xyz[a, :2] + t * seg_vec
+        delta = xy_point - proj
+        dist2 = float(delta @ delta)
+        if best_dist2 is None or dist2 < best_dist2:
+            best_dist2 = dist2
+            if a == n - 1 and b == 0:
+                best_s = (ref_s[a] + t * DS) % length
+            else:
+                best_s = ref_s[a] + t * (ref_s[b] - ref_s[a])
+            best_d = float(delta @ ref_normal[a, :2])
+    assert best_d is not None and best_s is not None  # window_samples >= 0 always yields >=1 segment
+    return best_s, best_d
+
+
 def project_laps(
     laps: list[CleanLap], scale: float, ref_s: np.ndarray, ref_xyz: np.ndarray, ref_normal: np.ndarray
 ) -> tuple[list[list[float]], list[list[float]]]:
     """Project every point of every lap onto the reference line.
 
+    Matching a point to a reference sample by nearest XY distance alone is
+    ambiguous wherever two different parts of the course pass close
+    together in the horizontal plane but are actually far apart along the
+    course (different `s`) -- e.g. Suzuka's grade-separated figure-eight
+    crossover, where the upper and lower levels are only ~10-20 m apart in
+    XY. A point genuinely on one level can end up nearest, in XY, to a
+    reference sample on the *other* level, contaminating that sample's
+    z_buckets/d_buckets with the wrong level's elevation (measured: up to
+    ~20 m of spurious spread in a single 1 m bucket at Suzuka's crossovers,
+    producing a physically impossible +-30% grade wiggle in the exported
+    course after aggregation -- not just noise, since XY-only matching
+    reliably prefers the wrong branch there, not a random mix).
+
+    Instead, each lap is walked sequentially, in telemetry order (a car
+    cannot teleport within a lap):
+    1. The lap's first point uses an unconstrained global nearest-XY
+       search (as before). This is safe: every clean lap starts and ends
+       at the start/finish line (by definition of "lap"), never at a
+       mid-lap crossover.
+    2. Every subsequent point searches only within a window around the
+       *previous point's own resolved index*, sized by
+       LOCAL_SEARCH_MARGIN_M plus that step's actual FastF1 `Distance`
+       delta (meters, monotonic within one lap, independent of the X/Y/Z
+       unit question -- see scale.py) -- a window far too narrow to ever
+       reach the course's other, spatially-close-but-arc-length-distant
+       branch.
+    3. A step whose best match still exceeds MAX_PLAUSIBLE_OFFSET does not
+       update the anchor -- its Distance delta simply accumulates into the
+       next step's window -- so one bad/dropped point can't permanently
+       derail the rest of the lap's tracking.
+
+    Separately, each point's *elevation* is checked against the lap's own
+    last trustworthy Z (see MAX_PLAUSIBLE_GRADE): GPS altitude is markedly
+    less accurate than horizontal position, and grade-separated crossovers
+    are exactly the kind of structure that causes transient altitude
+    glitches (measured on real Suzuka data). A point whose Z implies an
+    impossible grade is dropped entirely -- d_buckets[i] and z_buckets[i]
+    must stay paired/same-length at every index (geometry.py's bank-angle
+    regression, `evaluate_bank_significance`, assumes d_buckets[i][k] and
+    z_buckets[i][k] come from the same point) -- and, like the position-
+    anchor freeze above, doesn't move the "last trustworthy Z" forward, so
+    a multi-sample glitch can't cascade.
+
     Returns (d_buckets, z_buckets): each is a list of length len(ref_s),
     where d_buckets[i] / z_buckets[i] hold the lateral offset / elevation
-    values (meters) of all lap points that projected nearest to sample i.
+    values (meters) of all lap points that projected nearest to sample i,
+    paired index-for-index.
     """
     n = len(ref_s)
     tree = cKDTree(ref_xyz[:, :2])
     d_buckets: list[list[float]] = [[] for _ in range(n)]
     z_buckets: list[list[float]] = [[] for _ in range(n)]
+    margin_samples = max(1, int(round(LOCAL_SEARCH_MARGIN_M / DS)))
 
     for lap in laps:
         pts = lap.telemetry[["X", "Y", "Z"]].to_numpy(dtype=float) * scale
+        dist = lap.telemetry["Distance"].to_numpy(dtype=float)
         xy = pts[:, :2]
-        _, nearest_idx = tree.query(xy, k=1)
 
+        anchor_i: int | None = None
+        anchor_dist: float | None = None
+        last_good_z: float | None = None
+        last_good_z_dist: float | None = None
         for pi in range(len(pts)):
-            i = int(nearest_idx[pi])
-            i_prev = (i - 1) % n
-            i_next = (i + 1) % n
-            best_d = None
-            best_s = None
-            best_dist2 = None
-            for a, b in ((i_prev, i), (i, i_next)):
-                seg_vec = ref_xyz[b, :2] - ref_xyz[a, :2]
-                seg_len2 = float(seg_vec @ seg_vec)
-                if seg_len2 < 1e-9:
-                    continue
-                t = float((xy[pi] - ref_xyz[a, :2]) @ seg_vec / seg_len2)
-                t = min(1.0, max(0.0, t))
-                proj = ref_xyz[a, :2] + t * seg_vec
-                delta = xy[pi] - proj
-                dist2 = float(delta @ delta)
-                if best_dist2 is None or dist2 < best_dist2:
-                    best_dist2 = dist2
-                    # handle wrap segment (a=n-1, b=0): s goes a -> a+ds
-                    if a == n - 1 and b == 0:
-                        best_s = (ref_s[a] + t * DS) % (ref_s[-1] + DS)
-                    else:
-                        best_s = ref_s[a] + t * (ref_s[b] - ref_s[a])
-                    best_d = float(delta @ ref_normal[a, :2])
-            if best_d is None or abs(best_d) > MAX_PLAUSIBLE_OFFSET:
-                continue
-            bucket = int(round(best_s / DS)) % n
-            d_buckets[bucket].append(best_d)
-            z_buckets[bucket].append(float(pts[pi, 2]))
+            if anchor_i is None:
+                _, i0 = tree.query(xy[pi])
+                center_i = int(i0)
+                window_samples = margin_samples
+            else:
+                step = abs(dist[pi] - anchor_dist)
+                window_samples = max(1, int(round(step / DS)) + margin_samples)
+                center_i = anchor_i
+
+            best_s, best_d = _project_point_to_window(
+                xy[pi], center_i, window_samples, ref_s, ref_xyz, ref_normal,
+            )
+
+            if abs(best_d) > MAX_PLAUSIBLE_OFFSET:
+                continue  # anchor unchanged; next step's window widens accordingly
+
+            # The position match is trustworthy regardless of the Z check
+            # below, so the anchor always advances here -- only whether
+            # this point reaches the buckets (and moves "last trustworthy
+            # Z" forward) depends on the Z check.
+            anchor_i = int(round(best_s / DS)) % n
+            anchor_dist = dist[pi]
+
+            z = float(pts[pi, 2])
+            if last_good_z is None:
+                z_is_plausible = True  # first point of the lap: trust it (see docstring)
+            else:
+                z_step = max(abs(dist[pi] - last_good_z_dist), DS)
+                z_is_plausible = abs(z - last_good_z) / z_step <= MAX_PLAUSIBLE_GRADE
+            if not z_is_plausible:
+                continue  # drop the whole point; d_buckets/z_buckets must stay paired
+
+            last_good_z = z
+            last_good_z_dist = dist[pi]
+            d_buckets[anchor_i].append(best_d)
+            z_buckets[anchor_i].append(z)
 
     return d_buckets, z_buckets
 
