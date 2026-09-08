@@ -24,13 +24,23 @@ import { CockpitRig } from "./camera/cockpitRig";
 import type { VehiclePose } from "./camera/types";
 import { Hud } from "./ui/hud";
 import { createControls } from "./ui/controls";
+import { COURSE_CATALOG, DEFAULT_COURSE_ID } from "./course/catalog";
 
-const COURSE_URL = "/course/monaco.json";
 const FIXED_DT = 1 / 120; // design 6.4: physics runs at a fixed timestep
 const MAX_FRAME_DT = 0.1; // clamp huge dt after e.g. a backgrounded tab
 const LOOKAHEAD_M = 25; // design 6.6: cockpitRig's corner look-ahead distance
 
 const DEBUG = new URLSearchParams(window.location.search).get("debug") === "1";
+// design 6.9: `?course=<id>` picks which course/<id>.json to load, same
+// query-parameter convention as `?debug=1`.
+const COURSE_ID = new URLSearchParams(window.location.search).get("course") ?? DEFAULT_COURSE_ID;
+const COURSE_URL = `/course/${COURSE_ID}.json`;
+
+function selectCourse(id: string): void {
+  const params = new URLSearchParams(window.location.search);
+  params.set("course", id);
+  window.location.search = params.toString();
+}
 
 function createScene(): { scene: THREE.Scene; camera: THREE.PerspectiveCamera; renderer: THREE.WebGLRenderer } {
   const scene = new THREE.Scene();
@@ -95,8 +105,15 @@ async function main() {
   const cameraManager = new CameraManager([new ChaseRig(), new CockpitRig()]);
   cameraManager.init(camera, poseFor(track, vehicle));
 
-  const controls = createControls(document.body, cameraManager.list(), (id) => cameraManager.select(id));
-  const hud = new Hud(document.body, DEBUG);
+  const controls = createControls(
+    document.body,
+    cameraManager.list(),
+    (id) => cameraManager.select(id),
+    COURSE_CATALOG,
+    COURSE_ID,
+    selectCourse,
+  );
+  const hud = new Hud(document.body, DEBUG, course.meta.name);
 
   const sliderThrottle = new SliderThrottle(controls.slider);
   const keyboardThrottle = new KeyboardThrottle(sliderThrottle);

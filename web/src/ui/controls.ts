@@ -11,6 +11,11 @@ export interface CameraOption {
   label: string;
 }
 
+export interface CourseOption {
+  id: string;
+  label: string;
+}
+
 export interface Controls {
   slider: HTMLInputElement;
   setActiveCamera(id: string): void;
@@ -20,6 +25,9 @@ export function createControls(
   parent: HTMLElement,
   cameraOptions: CameraOption[],
   onCameraSelect: (id: string) => void,
+  courseOptions: CourseOption[],
+  activeCourseId: string,
+  onCourseSelect: (id: string) => void,
 ): Controls {
   const root = document.createElement("div");
   root.style.cssText =
@@ -50,6 +58,24 @@ export function createControls(
   select.addEventListener("change", () => onCameraSelect(select.value));
   cameraRow.appendChild(select);
   root.appendChild(cameraRow);
+
+  const courseRow = document.createElement("label");
+  courseRow.style.cssText = "display:flex;align-items:center;gap:8px;";
+  courseRow.textContent = "course";
+  const courseSelect = document.createElement("select");
+  for (const option of courseOptions) {
+    const el = document.createElement("option");
+    el.value = option.id;
+    el.textContent = option.label;
+    if (option.id === activeCourseId) el.selected = true;
+    courseSelect.appendChild(el);
+  }
+  // Course switching re-initializes the whole scene (design 6.9), so unlike
+  // the camera select this doesn't go through a live callback -- it's
+  // treated as a navigation.
+  courseSelect.addEventListener("change", () => onCourseSelect(courseSelect.value));
+  courseRow.appendChild(courseSelect);
+  root.appendChild(courseRow);
 
   parent.appendChild(root);
 
