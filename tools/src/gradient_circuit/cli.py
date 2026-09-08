@@ -1,6 +1,6 @@
-"""Command-line entry point: generate course/monaco.json from FastF1 data.
+"""Command-line entry point: generate course/<circuit>.json from FastF1 data.
 
-Design ref: 02_design.md sections 4, 5. Plan ref: 03_plan.md P1.5.
+Design ref: 02_design.md sections 4, 4.7, 5. Plan ref: 03_plan.md P1.5, P7.1.
 """
 
 from __future__ import annotations
@@ -11,7 +11,8 @@ from pathlib import Path
 
 import numpy as np
 
-from .session import select_monaco_session
+from .circuits import CIRCUITS
+from .session import select_session
 from .laps import extract_clean_laps, fastest_lap
 from .scale import measure_scale
 from .centerline import generate_centerline, DEFAULT_SG_WINDOW, DEFAULT_SG_POLYORDER
@@ -50,7 +51,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gradient-circuit")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    gen = sub.add_parser("generate", help="Generate course/monaco.json from FastF1 data")
+    gen = sub.add_parser("generate", help="Generate course/<circuit>.json from FastF1 data")
+    gen.add_argument(
+        "--circuit", type=str, default="monaco", choices=sorted(CIRCUITS),
+        help="Circuit to generate (default: monaco)",
+    )
     gen.add_argument("--year", type=int, default=None, help="Explicit year (default: auto-select)")
     gen.add_argument("--session", type=str, default="R", help="Session code (default: R)")
     gen.add_argument("--out", type=Path, required=True, help="Output JSON path")
@@ -67,8 +72,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_generate(args: argparse.Namespace) -> int:
-    print(f"Selecting Monaco GP session (year={args.year or 'auto'}, session={args.session})...")
-    sel = select_monaco_session(year=args.year, session_code=args.session)
+    circuit = CIRCUITS[args.circuit]
+    print(f"Selecting {circuit.event_name} session (year={args.year or 'auto'}, session={args.session})...")
+    sel = select_session(circuit.event_name, year=args.year, session_code=args.session)
     print(f"  -> {sel.year} {sel.event_name} [{sel.session_code}]")
 
     print("Extracting clean laps...")
@@ -93,7 +99,9 @@ def _run_generate(args: argparse.Namespace) -> int:
     print("Estimating width...")
     half_left_raw, half_right_raw, _ = raw_half_widths(cl["d_buckets"])
     calib = WidthCalibration(k=args.width_k, margin=args.width_margin)
-    width_left_ref, width_right_ref, clamp_stats = apply_calibration(half_left_raw, half_right_raw, calib)
+    width_left_ref, width_right_ref, clamp_stats = apply_calibration(
+        half_left_raw, half_right_raw, calib, circuit.width_min_m, circuit.width_max_m,
+    )
     # d_buckets/z_buckets (and therefore width_left_ref/width_right_ref) are
     # indexed by cl["ref_s"], the grid *before* reparameterize_uniform --
     # not by cl["s"], the final exported grid (measured to differ by 14
@@ -127,7 +135,7 @@ def _run_generate(args: argparse.Namespace) -> int:
     print(f"  -> bank_source={bank_source} (evidence insufficient; see design 4.6)")
 
     doc = build_course_document(
-        name="Circuit de Monaco",
+        name=circuit.name,
         event=sel.event_name,
         year=sel.year,
         session_code=sel.session_code,
@@ -149,7 +157,7 @@ def _run_generate(args: argparse.Namespace) -> int:
     )
 
     print("Validating...")
-    results = run_all(doc, cl["closure_gap"])
+    results = run_all(doc, cl["closure_gap"], circuit)
     all_passed = print_report(results)
 
     write_course_json(doc, args.out)

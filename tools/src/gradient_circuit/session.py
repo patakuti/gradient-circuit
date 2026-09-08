@@ -14,7 +14,7 @@ import fastf1
 CACHE_DIR = Path(__file__).resolve().parents[2] / ".fastf1cache"
 
 # Number of past years to search when auto-selecting a session with usable
-# position (telemetry) data for the Monaco Grand Prix race.
+# position (telemetry) data for the requested event.
 MAX_YEARS_BACK = 8
 
 
@@ -51,24 +51,24 @@ def _session_has_position_data(session: fastf1.core.Session) -> bool:
     return False
 
 
-def select_monaco_session(
-    year: int | None = None, session_code: str = "R"
+def select_session(
+    event_name: str, year: int | None = None, session_code: str = "R"
 ) -> SessionSelection:
-    """Select a Monaco GP session with usable position data.
+    """Select a session for the given event with usable position data.
 
     If `year` is given, that year is used directly (no fallback search) so
     that results are reproducible when explicitly requested.
     Otherwise, search backwards from the current year for the most recent
-    Monaco GP race session that has position telemetry available.
+    session of this event that has position telemetry available.
     """
     _ensure_cache()
 
     if year is not None:
-        event = fastf1.get_event(year, "Monaco Grand Prix")
+        event = fastf1.get_event(year, event_name)
         session = event.get_session(session_code)
         if not _session_has_position_data(session):
             raise RuntimeError(
-                f"No position data available for Monaco GP {year} {session_code}"
+                f"No position data available for {event_name} {year} {session_code}"
             )
         return SessionSelection(year, session_code, event["EventName"], session)
 
@@ -76,7 +76,7 @@ def select_monaco_session(
     errors: list[str] = []
     for candidate_year in range(current_year, current_year - MAX_YEARS_BACK, -1):
         try:
-            event = fastf1.get_event(candidate_year, "Monaco Grand Prix")
+            event = fastf1.get_event(candidate_year, event_name)
         except Exception as exc:  # event not yet on calendar / not found
             errors.append(f"{candidate_year}: {exc}")
             continue
@@ -94,6 +94,6 @@ def select_monaco_session(
         errors.append(f"{candidate_year}: no position data")
 
     raise RuntimeError(
-        "Could not find a Monaco GP session with position data in the last "
-        f"{MAX_YEARS_BACK} years. Details: " + "; ".join(errors)
+        f"Could not find a {event_name} session with position data in the "
+        f"last {MAX_YEARS_BACK} years. Details: " + "; ".join(errors)
     )

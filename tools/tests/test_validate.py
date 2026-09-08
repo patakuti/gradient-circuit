@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from gradient_circuit.circuits import MONACO
 from gradient_circuit.validate import run_all
 
 
@@ -34,13 +35,13 @@ def _make_doc(count: int = 3337, width: float = 8.5) -> dict:
 
 def test_valid_document_passes_all_checks():
     doc = _make_doc()
-    results = run_all(doc, closure_gap=0.5)
+    results = run_all(doc, closure_gap=0.5, circuit=MONACO)
     assert all(r.passed for r in results)
 
 
 def test_width_out_of_range_fails_only_that_check():
     doc = _make_doc(width=2.0)  # way under the 8-12m target
-    results = run_all(doc, closure_gap=0.5)
+    results = run_all(doc, closure_gap=0.5, circuit=MONACO)
     by_id = {r.id: r for r in results}
     assert not by_id[3].passed
     assert by_id[1].passed  # length unaffected
@@ -50,7 +51,7 @@ def test_width_out_of_range_fails_only_that_check():
 def test_nan_is_detected():
     doc = _make_doc()
     doc["samples"]["z"][10] = float("nan")
-    results = run_all(doc, closure_gap=0.5)
+    results = run_all(doc, closure_gap=0.5, circuit=MONACO)
     by_id = {r.id: r for r in results}
     assert not by_id[6].passed
 
@@ -62,7 +63,7 @@ def test_mismatched_array_length_is_detected():
     doc = _make_doc()
     doc["samples"]["widthLeft"] = doc["samples"]["widthLeft"] + [8.0] * 14
     doc["samples"]["widthRight"] = doc["samples"]["widthRight"] + [8.0] * 14
-    results = run_all(doc, closure_gap=0.5)
+    results = run_all(doc, closure_gap=0.5, circuit=MONACO)
     by_id = {r.id: r for r in results}
     assert not by_id[7].passed
     assert by_id[1].passed  # unrelated checks still run
