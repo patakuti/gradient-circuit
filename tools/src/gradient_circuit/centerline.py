@@ -21,9 +21,18 @@ Pipeline:
    laps that projected near it (robust to off-line excursions/contact).
 4. Reconstruct the centerline as reference_line(s) + normal(s) * d_med(s)
    in the horizontal plane, with Z = Z_med(s).
-5. Smooth X, Y, Z with a periodic (wrap-boundary) Savitzky-Golay filter so
+5. Replace any remaining run of samples with an implausible grade
+   (`clip_implausible_grade`) via smooth interpolation from its trusted
+   neighbors. Needed even after step 3's per-sample median: measured on
+   real Suzuka data, at one of its two grade-separated crossovers, no
+   per-lap or per-sample filter (tried and rejected -- see
+   `clip_implausible_grade`'s docstring) reliably separates a real
+   elevation transition from GPS-altitude contamination, because which
+   lap-cluster is the majority genuinely flips underfoot as `s` crosses
+   the transition.
+6. Smooth X, Y, Z with a periodic (wrap-boundary) Savitzky-Golay filter so
    the loop has no seam at the start/finish line.
-6. Verify the loop closes (distance between the last and first sample is
+7. Verify the loop closes (distance between the last and first sample is
    within one sample spacing).
 """
 
@@ -80,23 +89,14 @@ MAX_PLAUSIBLE_OFFSET = 12.0
 # overall racing line.
 LOCAL_SEARCH_MARGIN_M = 15.0
 
-# Reject a point's Z (elevation) contribution when it implies a grade
-# steeper than this versus the lap's own last trustworthy Z, at that
-# step's actual Distance delta. Real F1 tracks stay well under this even
-# at their steepest (measured on real data: normal grade is within a few
-# percent, occasionally ~13% at a sharp elevation change) -- this is not a
-# matching/bucketing problem (see project_laps' docstring history): GPS
-# altitude is markedly less accurate than horizontal position, and grade-
-# separated crossovers (bridges/underpasses) are exactly the kind of
-# structure that causes transient multipath/signal-blockage altitude
-# glitches. Measured directly on 2026 Suzuka race data: multiple, mutually
-# unrelated laps (different drivers/lap numbers) show an isolated 1-2
-# sample Z spike of 10-20 m at the *same* XY location near each of
-# Suzuka's two crossover approaches, each implying >100% instantaneous
-# grade, sandwiched between otherwise-flat, physically ordinary samples
-# immediately before and after -- the signature of a sensor glitch, not a
-# real elevation feature (a real one would show a sustained, one-directional
-# grade over many samples, not an isolated spike that reverses immediately).
+# `clip_implausible_grade` (post-aggregation, applied to the candidate
+# centerline's Z before smoothing): a run of adjacent samples whose
+# implied grade exceeds this is replaced by smooth interpolation between
+# its trusted neighbors. Measured normal grade elsewhere on real courses
+# (2026 Monaco and Suzuka race data) stays within ~13% even at the
+# steepest genuine elevation changes -- see that function's docstring for
+# why this, not a per-lap or per-point filter, is what actually resolves
+# the GPS-altitude-glitch problem at a course's grade-separated crossovers.
 MAX_PLAUSIBLE_GRADE = 0.15
 
 
@@ -260,17 +260,17 @@ def project_laps(
        next step's window -- so one bad/dropped point can't permanently
        derail the rest of the lap's tracking.
 
-    Separately, each point's *elevation* is checked against the lap's own
-    last trustworthy Z (see MAX_PLAUSIBLE_GRADE): GPS altitude is markedly
-    less accurate than horizontal position, and grade-separated crossovers
-    are exactly the kind of structure that causes transient altitude
-    glitches (measured on real Suzuka data). A point whose Z implies an
-    impossible grade is dropped entirely -- d_buckets[i] and z_buckets[i]
-    must stay paired/same-length at every index (geometry.py's bank-angle
-    regression, `evaluate_bank_significance`, assumes d_buckets[i][k] and
-    z_buckets[i][k] come from the same point) -- and, like the position-
-    anchor freeze above, doesn't move the "last trustworthy Z" forward, so
-    a multi-sample glitch can't cascade.
+    Elevation is *not* filtered here at all -- neither per point nor per
+    lap. GPS altitude glitches near a course's grade-separated crossovers
+    turned out not to be reliably separable from genuine (if steep) real
+    transitions by looking at any single point, lap, or even a per-sample
+    majority vote across laps: at one of Suzuka's two crossovers, which
+    lap-cluster is the "majority" genuinely flips as `s` crosses the real
+    transition, so per-sample filtering (by any of: a lap's own running Z,
+    the reference lap's Z, or a per-sample trimmed median) either misses a
+    sustained wrong block or turns a real gradual transition into an
+    erratic, sample-by-sample flip. The fix that actually works operates
+    after aggregation instead -- see `clip_implausible_grade`.
 
     Returns (d_buckets, z_buckets): each is a list of length len(ref_s),
     where d_buckets[i] / z_buckets[i] hold the lateral offset / elevation
@@ -290,8 +290,6 @@ def project_laps(
 
         anchor_i: int | None = None
         anchor_dist: float | None = None
-        last_good_z: float | None = None
-        last_good_z_dist: float | None = None
         for pi in range(len(pts)):
             if anchor_i is None:
                 _, i0 = tree.query(xy[pi])
@@ -309,26 +307,11 @@ def project_laps(
             if abs(best_d) > MAX_PLAUSIBLE_OFFSET:
                 continue  # anchor unchanged; next step's window widens accordingly
 
-            # The position match is trustworthy regardless of the Z check
-            # below, so the anchor always advances here -- only whether
-            # this point reaches the buckets (and moves "last trustworthy
-            # Z" forward) depends on the Z check.
             anchor_i = int(round(best_s / DS)) % n
             anchor_dist = dist[pi]
 
-            z = float(pts[pi, 2])
-            if last_good_z is None:
-                z_is_plausible = True  # first point of the lap: trust it (see docstring)
-            else:
-                z_step = max(abs(dist[pi] - last_good_z_dist), DS)
-                z_is_plausible = abs(z - last_good_z) / z_step <= MAX_PLAUSIBLE_GRADE
-            if not z_is_plausible:
-                continue  # drop the whole point; d_buckets/z_buckets must stay paired
-
-            last_good_z = z
-            last_good_z_dist = dist[pi]
             d_buckets[anchor_i].append(best_d)
-            z_buckets[anchor_i].append(z)
+            z_buckets[anchor_i].append(float(pts[pi, 2]))
 
     return d_buckets, z_buckets
 
@@ -337,15 +320,113 @@ def aggregate_centerline(
     ref_s: np.ndarray, ref_xyz: np.ndarray, ref_normal: np.ndarray,
     d_buckets: list[list[float]], z_buckets: list[list[float]],
 ) -> np.ndarray:
-    """Reconstruct centerline candidate points via median d / Z per sample."""
+    """Reconstruct centerline candidate points via median d / Z per sample
+    (robust to off-line excursions/contact and to a minority of GPS
+    glitches, given enough contributing laps). See `clip_implausible_grade`
+    for the remaining, harder case: a course location where which lap-
+    cluster is the majority genuinely flips as `s` varies.
+    """
     n = len(ref_s)
     out = np.empty((n, 3))
     for i in range(n):
         d_med = float(np.median(d_buckets[i])) if d_buckets[i] else 0.0
-        z_med = float(np.median(z_buckets[i])) if z_buckets[i] else ref_xyz[i, 2]
+        z_med = float(np.median(z_buckets[i])) if z_buckets[i] else float(ref_xyz[i, 2])
         out[i, 0] = ref_xyz[i, 0] + ref_normal[i, 0] * d_med
         out[i, 1] = ref_xyz[i, 1] + ref_normal[i, 1] * d_med
         out[i, 2] = z_med
+    return out
+
+
+def clip_implausible_grade(xyz: np.ndarray, max_grade: float = MAX_PLAUSIBLE_GRADE) -> np.ndarray:
+    """Replace any run of samples whose adjacent-sample grade exceeds
+    `max_grade` with smooth linear interpolation between its trusted
+    neighbors (periodic). `xyz` must be sampled at uniform DS spacing
+    (true of the reference line this runs on, before reparameterize_uniform).
+
+    Motivation (measured on real 2026 Suzuka race data, at one of its two
+    grade-separated crossovers): no per-lap or per-sample filter in
+    `project_laps`/`aggregate_centerline` reliably distinguishes a real
+    elevation transition from GPS-altitude contamination there, because
+    which lap-cluster is the majority genuinely flips from one 1 m sample
+    to the next across the transition -- not a single lap being wrong the
+    whole time, but the *dominant cluster itself* changing underfoot.
+    Filtering per-point or per-lap either misses a sustained wrong block
+    or turns a real transition into an erratic flip; neither produces a
+    course anyone would recognize as correct. Operating on the aggregated
+    Z sequence instead sidesteps the question of *why* a short run is
+    implausible and simply ensures the exported course never contains a
+    grade steeper than what's observed everywhere else on real courses
+    (measured: normal grade stays within ~13% even at the steepest
+    genuine elevation changes on both Monaco and Suzuka).
+    """
+    n = len(xyz)
+    z = xyz[:, 2].copy()
+    # `s` is uniformly DS apart by construction (this runs on the reference
+    # line's own arc-length grid, before reparameterize_uniform) -- DS is a
+    # fine approximation even for the one closing step, which is within
+    # [0, DS) of it by design (see _sample_count_for_closed_loop).
+    grade = np.abs(np.diff(z, append=z[0])) / DS
+
+    bad = grade > max_grade
+    if not np.any(bad):
+        return xyz
+
+    def periodic_span(lo: int, hi: int) -> int:
+        d = (hi - lo) % n
+        return d if d != 0 else n
+
+    out = xyz.copy()
+    # Grow each bad *step* (i -> i+1) into a bad *sample* mask so both
+    # endpoints of an implausible step are candidates for replacement.
+    bad_sample = bad | np.roll(bad, 1)
+    visited = np.zeros(n, dtype=bool)
+    for start in range(n):
+        if not bad_sample[start] or visited[start]:
+            continue
+        end = start
+        while bad_sample[(end + 1) % n] and not visited[(end + 1) % n]:
+            end = (end + 1) % n
+            if end == start:
+                break  # the whole course is flagged; nothing sane to interpolate from
+        lo = (start - 1) % n
+        hi = (end + 1) % n
+        if lo == hi:
+            continue  # degenerate: no trusted neighbor outside the run
+
+        # A straight line from z[lo] to z[hi] must itself respect
+        # max_grade -- picking the *immediate* neighbors of a short bad
+        # run is not enough if the real height difference between the
+        # two sides is large (measured on real Suzuka data: an abrupt
+        # ~6 m jump over just 1-2 samples). Keep pulling lo/hi further
+        # out -- consuming what were originally "trusted" flat samples
+        # right next to the run -- until the span is long enough to carry
+        # that height difference at <= max_grade. This is what actually
+        # produces a physically plausible profile, not just one that
+        # merely lacks a single too-steep step.
+        toggle = 0
+        while periodic_span(lo, hi) * DS * max_grade + 1e-9 < abs(z[hi] - z[lo]):
+            if periodic_span(lo, hi) >= n - 1:
+                break  # nearly the whole course; give up expanding further
+            if toggle % 2 == 0:
+                hi = (hi + 1) % n
+            else:
+                lo = (lo - 1) % n
+            toggle += 1
+
+        idx = []
+        i = (lo + 1) % n
+        while i != hi:
+            idx.append(i)
+            visited[i] = True
+            i = (i + 1) % n
+        visited[lo] = True
+        visited[hi] = True
+        run_len = len(idx)
+        if run_len == 0:
+            continue
+        for k, i in enumerate(idx):
+            t = (k + 1) / (run_len + 1)
+            out[i, 2] = (1.0 - t) * z[lo] + t * z[hi]
     return out
 
 
@@ -397,7 +478,12 @@ def generate_centerline(
 
     d_buckets, z_buckets = project_laps(clean_laps, scale, ref_s, ref_xyz, ref_normal)
     candidate = aggregate_centerline(ref_s, ref_xyz, ref_normal, d_buckets, z_buckets)
+    candidate = clip_implausible_grade(candidate)
     smoothed = smooth_periodic(candidate, sg_window, sg_polyorder)
+    # Savitzky-Golay can reintroduce a little overshoot right at the edge
+    # of a sharp correction (ordinary filter ringing); a second pass here
+    # catches that residue without needing a wider first-pass correction.
+    smoothed = clip_implausible_grade(smoothed)
     final_s, final_xyz = reparameterize_uniform(smoothed, DS)
 
     gap = closure_error(final_xyz)

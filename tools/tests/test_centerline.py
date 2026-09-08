@@ -12,7 +12,10 @@ import pytest
 
 from gradient_circuit.centerline import (
     DS,
+    MAX_PLAUSIBLE_GRADE,
     _sample_count_for_closed_loop,
+    aggregate_centerline,
+    clip_implausible_grade,
     compute_tangent_normal,
     project_laps,
     reparameterize_uniform,
@@ -225,18 +228,19 @@ def test_project_laps_tracks_through_racing_line_drift():
         assert found, f"no match within 3 samples of true index {true_i} (theta={theta_check:.2f}); drift={drift:.1f}m"
 
 
-def test_project_laps_rejects_isolated_z_glitch_not_the_recovery_point():
+def test_aggregate_centerline_rejects_isolated_z_glitch_via_majority_vote():
     """Regression guard for the real bug found on 2026 Japanese GP (Suzuka)
     data: this was never a matching/bucketing problem (positions matched
     correctly, verified by tracing individual laps) -- GPS altitude itself
     has isolated 1-2 sample spikes of 10-20 m at Suzuka's two crossovers,
     consistently at the same XY location across many unrelated laps
     (consistent with bridge/underpass multipath), each implying >100%
-    instantaneous grade and reversing immediately after. A single such
-    spike must drop that point entirely (d_buckets/z_buckets stay paired
-    per index -- geometry.py's bank-angle regression assumes it) without
-    also rejecting the very next, perfectly normal sample that recovers
-    back to the true elevation."""
+    instantaneous grade and reversing immediately after. project_laps
+    keeps every point unfiltered (see its docstring for why per-lap/per-
+    point Z filtering was tried and rejected); `aggregate_centerline`'s
+    plain per-sample median must still let one glitched lap's spike lose
+    to the many laps agreeing on the true elevation (ordinary median
+    robustness -- this is a baseline sanity check, not new machinery)."""
     # project_laps assumes a genuinely closed, uniformly DS-spaced reference
     # line (what `reparameterize_uniform` always produces in the real
     # pipeline -- see _make_crossover_reference above for why hand-rolling
@@ -251,13 +255,93 @@ def test_project_laps_rejects_isolated_z_glitch_not_the_recovery_point():
     n = len(ref_s)
 
     glitch_i = n // 4  # away from the loop seam at index 0
-    lap = _lap_tracing_branch(ref_s, ref_xyz, i_lo=glitch_i - 50, i_hi=glitch_i + 50)
+    good_laps = [_lap_tracing_branch(ref_s, ref_xyz, i_lo=glitch_i - 50, i_hi=glitch_i + 50) for _ in range(10)]
+    bad_lap = _lap_tracing_branch(ref_s, ref_xyz, i_lo=glitch_i - 50, i_hi=glitch_i + 50)
     glitch_pi = 50  # local index of glitch_i within the traced lap
-    lap.telemetry.loc[glitch_pi, "Z"] = 95.0  # isolated spike: +15 m over ~1 m = ~1500% grade
+    bad_lap.telemetry.loc[glitch_pi, "Z"] = 95.0  # isolated spike: +15 m over ~1 m = ~1500% grade
 
-    d_buckets, z_buckets = project_laps([lap], scale=1.0, ref_s=ref_s, ref_xyz=ref_xyz, ref_normal=ref_normal)
+    d_buckets, z_buckets = project_laps(
+        good_laps + [bad_lap], scale=1.0, ref_s=ref_s, ref_xyz=ref_xyz, ref_normal=ref_normal,
+    )
+    assert len(z_buckets[glitch_i]) == 11, "project_laps keeps every point, glitch included"
 
-    assert d_buckets[glitch_i] == [] and z_buckets[glitch_i] == [], "the glitched point must be dropped entirely"
-    assert z_buckets[glitch_i + 1] == pytest.approx([80.0]), "the very next (recovering) sample must not be rejected too"
-    assert z_buckets[glitch_i - 1] == pytest.approx([80.0])
-    assert len(d_buckets[glitch_i + 1]) == len(z_buckets[glitch_i + 1])  # stay paired everywhere
+    xyz = aggregate_centerline(ref_s, ref_xyz, ref_normal, d_buckets, z_buckets)
+    assert xyz[glitch_i, 2] == pytest.approx(80.0, abs=1e-6), "the majority must win, not the one glitched lap"
+    assert xyz[glitch_i + 1, 2] == pytest.approx(80.0, abs=1e-6)
+    assert xyz[glitch_i - 1, 2] == pytest.approx(80.0, abs=1e-6)
+
+
+def test_aggregate_centerline_rejects_sustained_wrong_branch_block_via_majority_vote():
+    """Companion to the test above: one lap sustaining a self-consistent
+    wrong Z for tens of meters (not just an isolated spike) still loses to
+    ten laps agreeing on the truth, via ordinary median robustness. (This
+    is *not* what fixed the real, harder Suzuka case where the majority
+    itself flips along `s` -- see `clip_implausible_grade` for that.)"""
+    ref_s, ref_xyz, ref_normal = _make_crossover_reference()
+    n = len(ref_s)
+    i_a = _nearest_index(ref_xyz, np.array([0.0, -0.2]), (0, n // 2))  # branch A: z=0
+
+    span = 45
+    good_laps = [_lap_tracing_branch(ref_s, ref_xyz, i_lo=i_a - span, i_hi=i_a + span) for _ in range(10)]
+    bad_lap = _lap_tracing_branch(ref_s, ref_xyz, i_lo=i_a - span, i_hi=i_a + span)
+    # Corrupt a sustained block (not just 1-2 points) to the *other*
+    # branch's real elevation (20.0), self-consistent throughout -- as if
+    # this were the reference lap and it alone dipped/glitched here.
+    bad_lap.telemetry.loc[30:60, "Z"] = 20.0
+
+    d_buckets, z_buckets = project_laps(
+        good_laps + [bad_lap], scale=1.0, ref_s=ref_s, ref_xyz=ref_xyz, ref_normal=ref_normal,
+    )
+    xyz = aggregate_centerline(ref_s, ref_xyz, ref_normal, d_buckets, z_buckets)
+
+    for i in range(i_a - 5, i_a + 6):
+        assert xyz[i, 2] == pytest.approx(0.0, abs=1e-6), f"sample {i} must follow the majority (0.0), not the one bad lap"
+
+
+def test_clip_implausible_grade_smooths_a_short_bad_run_and_leaves_the_rest_alone():
+    """Regression guard for the actual real-world fix: at one of Suzuka's
+    two crossovers, no per-lap or per-sample filter could tell a real
+    transition from GPS contamination, because the majority itself flips
+    along `s` (see centerline.py's module docstring and
+    clip_implausible_grade's docstring). Operating on the aggregated Z
+    sequence instead: a short run implying an impossible grade gets
+    smoothed by interpolation from its trusted neighbors, while a normal,
+    gently-varying profile elsewhere is left untouched."""
+    n = 300
+    s = np.arange(n) * DS
+    xyz = np.zeros((n, 3))
+    xyz[:, 0] = s
+    # Gentle, physically normal (and genuinely periodic, since this
+    # function treats the array as a closed loop) profile everywhere...
+    xyz[:, 2] = 80.0 + 3.0 * np.sin(2 * np.pi * s / n)
+
+    # ...except a short, erratic run (as if the majority flipped sample-
+    # to-sample across a contested transition): jumps up, down, up again,
+    # each step far exceeding MAX_PLAUSIBLE_GRADE.
+    bad_lo, bad_hi = 150, 156
+    xyz[bad_lo:bad_hi, 2] = [95.0, 74.0, 96.0, 75.0, 94.0, 76.0]
+
+    out = clip_implausible_grade(xyz)
+
+    grade = np.abs(np.diff(out[:, 2], append=out[0, 2])) / DS
+    assert np.all(grade <= MAX_PLAUSIBLE_GRADE + 1e-9), "no exported step may exceed the plausible-grade cap"
+
+    # The untouched region must be exactly as it was (gentle, not flagged).
+    assert out[50, 2] == pytest.approx(xyz[50, 2])
+    assert out[250, 2] == pytest.approx(xyz[250, 2])
+
+    # The smoothed run must land strictly between its trusted neighbors
+    # (a monotonic-ish interpolation, no leftover spikes).
+    lo_z, hi_z = out[bad_lo - 1, 2], out[bad_hi, 2]
+    for i in range(bad_lo, bad_hi):
+        assert min(lo_z, hi_z) - 1e-6 <= out[i, 2] <= max(lo_z, hi_z) + 1e-6
+
+
+def test_clip_implausible_grade_leaves_a_fully_plausible_profile_untouched():
+    n = 200
+    s = np.arange(n) * DS
+    xyz = np.zeros((n, 3))
+    xyz[:, 0] = s
+    xyz[:, 2] = 80.0 + 3.0 * np.sin(2 * np.pi * s / n)  # smooth, gentle wave
+    out = clip_implausible_grade(xyz)
+    assert out is xyz or np.allclose(out[:, 2], xyz[:, 2])
