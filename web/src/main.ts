@@ -14,6 +14,7 @@ import { Track } from "./sim/track";
 import { buildTrackMesh } from "./render/trackMesh";
 import { buildBarriers } from "./render/barrier";
 import { setupEnvironment } from "./render/environment";
+import { buildVehicleMesh } from "./render/vehicleMesh";
 import { stepVehicle, cornerSpeedLimit, type VehicleState } from "./sim/vehicle";
 import { DEFAULT_VEHICLE_PARAMS } from "./sim/vehicleParams";
 import { KeyboardAxis, THROTTLE_KEYS, BRAKE_KEYS } from "./sim/input";
@@ -32,7 +33,7 @@ const MAX_FRAME_DT = 0.1; // clamp huge dt after e.g. a backgrounded tab
 const LOOKAHEAD_M = 25; // design 6.6: cockpitRig's corner look-ahead distance
 
 const DEBUG = new URLSearchParams(window.location.search).get("debug") === "1";
-// design 6.9: `?course=<id>` picks which course/<id>.json to load, same
+// design 6.10: `?course=<id>` picks which course/<id>.json to load, same
 // query-parameter convention as `?debug=1`.
 const COURSE_ID = new URLSearchParams(window.location.search).get("course") ?? DEFAULT_COURSE_ID;
 const COURSE_URL = `/course/${COURSE_ID}.json`;
@@ -100,6 +101,8 @@ async function main() {
   setupEnvironment(scene, track);
   scene.add(buildTrackMesh(track));
   scene.add(buildBarriers(track));
+  const vehicleMesh = buildVehicleMesh();
+  scene.add(vehicleMesh);
 
   let vehicle: VehicleState = { s: 0, speed: 0, lap: 0, lateralOffset: 0 };
 
@@ -120,7 +123,7 @@ async function main() {
 
   const throttle = new KeyboardAxis(THROTTLE_KEYS);
   const brake = new KeyboardAxis(BRAKE_KEYS);
-  // design 6.10: browsers keep a fresh AudioContext suspended until a user
+  // design 6.11: browsers keep a fresh AudioContext suspended until a user
   // gesture resumes it, so start the engine sound on the first keypress.
   window.addEventListener("keydown", () => engineAudio.start(), { once: true });
 
@@ -163,6 +166,16 @@ async function main() {
     const pose = poseFor(track, vehicle);
     cameraManager.update(camera, pose, frameDt);
     controls.setActiveCamera(cameraManager.current.id);
+
+    // design 6.8: same position/orientation technique as the camera rigs
+    // (chaseRig.ts/cockpitRig.ts) -- set `up` before lookAt so it uses ours.
+    vehicleMesh.position.set(pose.position.x, pose.position.y, pose.position.z);
+    vehicleMesh.up.set(pose.up.x, pose.up.y, pose.up.z);
+    vehicleMesh.lookAt(
+      pose.position.x + pose.forward.x,
+      pose.position.y + pose.forward.y,
+      pose.position.z + pose.forward.z,
+    );
 
     const sample = track.sampleAt(vehicle.s);
     engineAudio.update({

@@ -2,7 +2,7 @@
  * Vehicle sound, procedurally generated with the Web Audio API (no
  * external audio files, same policy as render/textures.ts).
  *
- * Design ref: 02_design.md section 6.10. No `three` or `sim/` imports --
+ * Design ref: 02_design.md section 6.11. No `three` or `sim/` imports --
  * main.ts computes every value passed into update() (design 6.1).
  */
 
@@ -15,6 +15,7 @@ export interface VehicleAudioState {
 
 const NOISE_BUFFER_SECONDS = 2;
 const PARAM_SMOOTHING_S = 0.05; // avoids clicks from per-frame AudioParam updates
+const BRAKE_SOUND_MIN_SPEED = 3; // [m/s] (~11 km/h); brake sound fades to 0 below this
 
 function createNoiseBuffer(ctx: AudioContext): AudioBuffer {
   const length = Math.floor(ctx.sampleRate * NOISE_BUFFER_SECONDS);
@@ -35,7 +36,7 @@ function createNoiseLoop(ctx: AudioContext, buffer: AudioBuffer): AudioBufferSou
 
 /**
  * Engine/brake/cornering-scrub sound. Nodes are created once in `start()`;
- * `update()` only rewrites existing `AudioParam`s (design 6.10) -- no
+ * `update()` only rewrites existing `AudioParam`s (design 6.11) -- no
  * per-frame node creation/teardown.
  */
 export class EngineAudio {
@@ -124,7 +125,11 @@ export class EngineAudio {
     const now = ctx.currentTime;
     this.engineOsc.frequency.setTargetAtTime(80 + state.speed * 2, now, PARAM_SMOOTHING_S);
     this.engineGain.gain.setTargetAtTime(0.05 + state.throttle * 0.15, now, PARAM_SMOOTHING_S);
-    this.brakeGain.gain.setTargetAtTime(state.brake * 0.2, now, PARAM_SMOOTHING_S);
+    // Real brakes don't squeal when the car is barely moving -- fade the
+    // sound out smoothly below BRAKE_SOUND_MIN_SPEED rather than gating it
+    // on/off, so there's no click as speed crosses the threshold.
+    const brakeSpeedFactor = Math.min(1, state.speed / BRAKE_SOUND_MIN_SPEED);
+    this.brakeGain.gain.setTargetAtTime(state.brake * 0.2 * brakeSpeedFactor, now, PARAM_SMOOTHING_S);
     this.cornerGain.gain.setTargetAtTime(state.cornerLimited ? 0.25 : 0, now, PARAM_SMOOTHING_S);
   }
 }
