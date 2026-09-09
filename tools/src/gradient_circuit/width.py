@@ -19,10 +19,10 @@ import numpy as np
 PCTL_LO = 2
 PCTL_HI = 98
 
+# Half-width sanity clamp: generic bounds (not circuit-specific), applied
+# before the full-width target from CircuitConfig (design 4.7) is enforced.
 CLAMP_HALF_MIN = 3.0
 CLAMP_HALF_MAX = 7.0
-CLAMP_FULL_MIN = 8.0
-CLAMP_FULL_MAX = 12.0
 
 SMOOTH_WINDOW_M = 31  # periodic moving-average window [m], per design 4.5
 
@@ -68,9 +68,16 @@ def _moving_average_periodic(x: np.ndarray, window_m: int) -> np.ndarray:
 
 
 def apply_calibration(
-    half_left_raw: np.ndarray, half_right_raw: np.ndarray, calib: WidthCalibration
+    half_left_raw: np.ndarray,
+    half_right_raw: np.ndarray,
+    calib: WidthCalibration,
+    width_min_m: float,
+    width_max_m: float,
 ) -> tuple[np.ndarray, np.ndarray, dict]:
     """Apply k/margin, clamp to physically plausible ranges, smooth.
+
+    `width_min_m`/`width_max_m` are the circuit's full-width clamp target
+    (design 4.7, CircuitConfig) -- measured per-circuit, not assumed.
 
     Returns (width_left, width_right, stats) where stats reports how often
     clamping triggered (design 4.5: should be < 5% of samples, acceptance
@@ -79,7 +86,7 @@ def apply_calibration(
     left = calib.k * half_left_raw + calib.margin
     right = calib.k * half_right_raw + calib.margin
 
-    left_clamped, right_clamped, full, full_clamped = _clamp_pair(left, right)
+    left_clamped, right_clamped, full, full_clamped = _clamp_pair(left, right, width_min_m, width_max_m)
 
     n = len(left_clamped)
     half_clamp_hits = int(np.sum((left != left_clamped) | (right != right_clamped)))
@@ -100,19 +107,21 @@ def apply_calibration(
     # comparison is meant to catch. Clamping again guarantees the invariant
     # holds for the values actually written to the JSON, not just "in
     # exact arithmetic".
-    left_final, right_final, _, _ = _clamp_pair(left_smoothed, right_smoothed)
+    left_final, right_final, _, _ = _clamp_pair(left_smoothed, right_smoothed, width_min_m, width_max_m)
 
     return left_final, right_final, stats
 
 
-def _clamp_pair(left: np.ndarray, right: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def _clamp_pair(
+    left: np.ndarray, right: np.ndarray, full_min_m: float, full_max_m: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Clamp half-widths to [CLAMP_HALF_MIN, CLAMP_HALF_MAX] and their sum to
-    [CLAMP_FULL_MIN, CLAMP_FULL_MAX], rescaling left/right proportionally
-    when the full-width clamp changes the total (preserves the centerline
-    offset between left/right rather than shifting it)."""
+    [full_min_m, full_max_m], rescaling left/right proportionally when the
+    full-width clamp changes the total (preserves the centerline offset
+    between left/right rather than shifting it)."""
     left_c = np.clip(left, CLAMP_HALF_MIN, CLAMP_HALF_MAX)
     right_c = np.clip(right, CLAMP_HALF_MIN, CLAMP_HALF_MAX)
     full = left_c + right_c
-    full_c = np.clip(full, CLAMP_FULL_MIN, CLAMP_FULL_MAX)
+    full_c = np.clip(full, full_min_m, full_max_m)
     scale_factor = np.where(full > 0, full_c / full, 1.0)
     return left_c * scale_factor, right_c * scale_factor, full, full_c

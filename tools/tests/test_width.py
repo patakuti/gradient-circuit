@@ -8,14 +8,16 @@ from __future__ import annotations
 
 import numpy as np
 
+from gradient_circuit.circuits import MONACO
 from gradient_circuit.width import (
     apply_calibration,
     WidthCalibration,
     CLAMP_HALF_MIN,
     CLAMP_HALF_MAX,
-    CLAMP_FULL_MIN,
-    CLAMP_FULL_MAX,
 )
+
+CLAMP_FULL_MIN = MONACO.width_min_m
+CLAMP_FULL_MAX = MONACO.width_max_m
 
 
 def test_clamped_full_width_stays_within_bounds_after_smoothing():
@@ -28,7 +30,7 @@ def test_clamped_full_width_stays_within_bounds_after_smoothing():
     half_right_raw[50:60] = 5.0
 
     calib = WidthCalibration(k=1.6, margin=0.5)
-    left, right, stats = apply_calibration(half_left_raw, half_right_raw, calib)
+    left, right, stats = apply_calibration(half_left_raw, half_right_raw, calib, CLAMP_FULL_MIN, CLAMP_FULL_MAX)
     full = left + right
 
     assert np.all(left >= CLAMP_HALF_MIN - 1e-9)
@@ -48,6 +50,6 @@ def test_near_zero_scatter_floors_to_min_width():
     half_left_raw = np.zeros(n)
     half_right_raw = np.zeros(n)
     calib = WidthCalibration(k=1.6, margin=0.5)
-    left, right, _ = apply_calibration(half_left_raw, half_right_raw, calib)
+    left, right, _ = apply_calibration(half_left_raw, half_right_raw, calib, CLAMP_FULL_MIN, CLAMP_FULL_MAX)
     full = left + right
     assert np.allclose(full, CLAMP_FULL_MIN, atol=1e-6)

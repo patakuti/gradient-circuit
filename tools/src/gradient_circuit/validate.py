@@ -21,14 +21,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-LENGTH_TARGET = 3337.0
-LENGTH_TOLERANCE = 0.03
-
-ELEVATION_TARGET = 40.0
-ELEVATION_TOLERANCE = 0.15
-
-WIDTH_MIN = 8.0
-WIDTH_MAX = 12.0
+from .circuits import CircuitConfig
 
 CLOSURE_MAX = 1.0
 
@@ -43,7 +36,7 @@ class CheckResult:
     detail: str
 
 
-def run_all(doc: dict, closure_gap: float) -> list[CheckResult]:
+def run_all(doc: dict, closure_gap: float, circuit: CircuitConfig) -> list[CheckResult]:
     samples = doc["samples"]
     x = np.array(samples["x"])
     y = np.array(samples["y"])
@@ -71,29 +64,30 @@ def run_all(doc: dict, closure_gap: float) -> list[CheckResult]:
     ))
 
     length = doc["length"]
-    length_dev = abs(length - LENGTH_TARGET) / LENGTH_TARGET
+    length_dev = abs(length - circuit.length_target_m) / circuit.length_target_m
     results.append(CheckResult(
-        1, "course length", length_dev <= LENGTH_TOLERANCE,
-        f"length={length:.2f}m target={LENGTH_TARGET}m deviation={length_dev*100:.2f}% (max {LENGTH_TOLERANCE*100:.0f}%)",
+        1, "course length", length_dev <= circuit.length_tolerance,
+        f"length={length:.2f}m target={circuit.length_target_m}m deviation={length_dev*100:.2f}% (max {circuit.length_tolerance*100:.0f}%)",
     ))
 
     elevation_delta = float(z.max() - z.min())
-    elev_dev = abs(elevation_delta - ELEVATION_TARGET) / ELEVATION_TARGET
+    elev_dev = abs(elevation_delta - circuit.elevation_target_m) / circuit.elevation_target_m
     results.append(CheckResult(
-        2, "elevation delta", elev_dev <= ELEVATION_TOLERANCE,
-        f"delta={elevation_delta:.2f}m target={ELEVATION_TARGET}m deviation={elev_dev*100:.2f}% (max {ELEVATION_TOLERANCE*100:.0f}%)",
+        2, "elevation delta", elev_dev <= circuit.elevation_tolerance,
+        f"delta={elevation_delta:.2f}m target={circuit.elevation_target_m}m deviation={elev_dev*100:.2f}% (max {circuit.elevation_tolerance*100:.0f}%)",
     ))
 
     full_width = width_left + width_right
     # Epsilon guards against floating-point summation noise at the clamp
     # boundary (width.py re-clamps after smoothing, but a few ULPs of drift
-    # can still remain, e.g. 8.0 - 4e-15) -- the design's [8, 12] m target
-    # is a physical-realism bound, not a bit-exact constraint.
+    # can still remain, e.g. 8.0 - 4e-15) -- the circuit's width target
+    # (CircuitConfig, design 4.7) is a physical-realism bound, not a
+    # bit-exact constraint.
     eps = 1e-6
-    width_ok = bool(np.all((full_width >= WIDTH_MIN - eps) & (full_width <= WIDTH_MAX + eps)))
+    width_ok = bool(np.all((full_width >= circuit.width_min_m - eps) & (full_width <= circuit.width_max_m + eps)))
     results.append(CheckResult(
         3, "full width range", width_ok,
-        f"min={full_width.min():.2f}m max={full_width.max():.2f}m target=[{WIDTH_MIN},{WIDTH_MAX}]m",
+        f"min={full_width.min():.2f}m max={full_width.max():.2f}m target=[{circuit.width_min_m},{circuit.width_max_m}]m",
     ))
 
     results.append(CheckResult(

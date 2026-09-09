@@ -37,11 +37,16 @@ export class Hud {
   private readonly mainLines: HTMLElement;
   private readonly debugLines: HTMLElement | null;
 
-  constructor(parent: HTMLElement, showDebug: boolean) {
+  constructor(parent: HTMLElement, showDebug: boolean, courseName: string) {
     const root = document.createElement("div");
     root.style.cssText =
       "position:fixed;top:12px;left:12px;padding:10px 14px;background:rgba(0,0,0,0.55);" +
       "color:#fff;font:13px monospace;border-radius:6px;line-height:1.6;z-index:10;white-space:pre;";
+
+    const courseLine = document.createElement("div");
+    courseLine.style.cssText = "font-weight:bold;margin-bottom:6px;";
+    courseLine.textContent = courseName;
+    root.appendChild(courseLine);
 
     this.mainLines = document.createElement("div");
     root.appendChild(this.mainLines);
