@@ -1,9 +1,10 @@
 /**
- * Throttle slider + camera-select control.
+ * Camera-select + course-select controls.
  *
  * Design ref: 02_design.md section 6.8. DOM-only -- takes and returns plain
  * data (camera ids/labels, a callback), never a `camera/` or `sim/` type,
- * so this module has no dependency on those layers.
+ * so this module has no dependency on those layers. Throttle/brake are
+ * keyboard-only (design 6.5) and have no UI element here.
  */
 
 export interface CameraOption {
@@ -17,7 +18,6 @@ export interface CourseOption {
 }
 
 export interface Controls {
-  slider: HTMLInputElement;
   setActiveCamera(id: string): void;
 }
 
@@ -33,17 +33,6 @@ export function createControls(
   root.style.cssText =
     "position:fixed;left:12px;bottom:12px;padding:10px 14px;background:rgba(0,0,0,0.55);" +
     "color:#fff;font:13px monospace;border-radius:6px;display:flex;flex-direction:column;gap:8px;z-index:10;";
-
-  const sliderRow = document.createElement("label");
-  sliderRow.style.cssText = "display:flex;align-items:center;gap:8px;";
-  sliderRow.textContent = "throttle";
-  const slider = document.createElement("input");
-  slider.type = "range";
-  slider.min = "0";
-  slider.max = "100";
-  slider.value = "0";
-  sliderRow.appendChild(slider);
-  root.appendChild(sliderRow);
 
   const cameraRow = document.createElement("label");
   cameraRow.style.cssText = "display:flex;align-items:center;gap:8px;";
@@ -80,7 +69,6 @@ export function createControls(
   parent.appendChild(root);
 
   return {
-    slider,
     setActiveCamera(id: string) {
       if (select.value !== id) select.value = id;
     },

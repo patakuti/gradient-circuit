@@ -1,6 +1,6 @@
 /**
- * HUD overlay: speed / throttle / elevation / grade / lap / lap time /
- * active camera, plus an optional debug panel.
+ * HUD overlay: speed / throttle / brake / elevation / grade / lap / lap
+ * time / active camera, plus an optional debug panel.
  *
  * Design ref: 02_design.md section 6.8. DOM-only, no `three` or `sim/`
  * imports -- main.ts computes every displayed value and passes plain data
@@ -10,6 +10,7 @@
 export interface HudData {
   speedKmh: number;
   throttlePercent: number;
+  brakePercent: number;
   elevationM: number;
   gradePercent: number;
   lap: number;
@@ -66,7 +67,7 @@ export class Hud {
   update(data: HudData, debug?: DebugData): void {
     this.mainLines.textContent =
       `speed: ${data.speedKmh.toFixed(0)} km/h\n` +
-      `throttle: ${data.throttlePercent.toFixed(0)}%\n` +
+      `throttle: ${data.throttlePercent.toFixed(0)}%  brake: ${data.brakePercent.toFixed(0)}%\n` +
       `elevation: ${data.elevationM.toFixed(1)} m\n` +
       `grade: ${data.gradePercent.toFixed(1)}%\n` +
       `lap: ${data.lap}  dist: ${data.lapDistanceM.toFixed(0)} m\n` +
