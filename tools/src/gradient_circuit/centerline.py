@@ -21,15 +21,18 @@ Pipeline:
    laps that projected near it (robust to off-line excursions/contact).
 4. Reconstruct the centerline as reference_line(s) + normal(s) * d_med(s)
    in the horizontal plane, with Z = Z_med(s).
-5. Replace any remaining run of samples with an implausible grade
+5. Smooth Z at any *geometrically* self-crossing region
+   (`smooth_self_crossing_regions`): wherever the reference line's own
+   horizontal path proves two far-apart-in-`s` samples are physically
+   stacked (a grade-separated crossover), replace Z there with smooth
+   interpolation from the surroundings, at a stricter grade cap than
+   step 5.1 below -- geometric detection doesn't depend on what the Z
+   data happens to say, so it stays reliable exactly where per-lap/
+   per-sample Z filters (tried and rejected -- see that function's
+   docstring) aren't.
+5.1. Replace any *remaining* run of samples with an implausible grade
    (`clip_implausible_grade`) via smooth interpolation from its trusted
-   neighbors. Needed even after step 3's per-sample median: measured on
-   real Suzuka data, at one of its two grade-separated crossovers, no
-   per-lap or per-sample filter (tried and rejected -- see
-   `clip_implausible_grade`'s docstring) reliably separates a real
-   elevation transition from GPS-altitude contamination, because which
-   lap-cluster is the majority genuinely flips underfoot as `s` crosses
-   the transition.
+   neighbors -- a general safety net for anywhere else on the course.
 6. Smooth X, Y, Z with a periodic (wrap-boundary) Savitzky-Golay filter so
    the loop has no seam at the start/finish line.
 7. Verify the loop closes (distance between the last and first sample is
@@ -337,48 +340,25 @@ def aggregate_centerline(
     return out
 
 
-def clip_implausible_grade(xyz: np.ndarray, max_grade: float = MAX_PLAUSIBLE_GRADE) -> np.ndarray:
-    """Replace any run of samples whose adjacent-sample grade exceeds
-    `max_grade` with smooth linear interpolation between its trusted
-    neighbors (periodic). `xyz` must be sampled at uniform DS spacing
-    (true of the reference line this runs on, before reparameterize_uniform).
-
-    Motivation (measured on real 2026 Suzuka race data, at one of its two
-    grade-separated crossovers): no per-lap or per-sample filter in
-    `project_laps`/`aggregate_centerline` reliably distinguishes a real
-    elevation transition from GPS-altitude contamination there, because
-    which lap-cluster is the majority genuinely flips from one 1 m sample
-    to the next across the transition -- not a single lap being wrong the
-    whole time, but the *dominant cluster itself* changing underfoot.
-    Filtering per-point or per-lap either misses a sustained wrong block
-    or turns a real transition into an erratic flip; neither produces a
-    course anyone would recognize as correct. Operating on the aggregated
-    Z sequence instead sidesteps the question of *why* a short run is
-    implausible and simply ensures the exported course never contains a
-    grade steeper than what's observed everywhere else on real courses
-    (measured: normal grade stays within ~13% even at the steepest
-    genuine elevation changes on both Monaco and Suzuka).
-    """
-    n = len(xyz)
-    z = xyz[:, 2].copy()
-    # `s` is uniformly DS apart by construction (this runs on the reference
-    # line's own arc-length grid, before reparameterize_uniform) -- DS is a
-    # fine approximation even for the one closing step, which is within
-    # [0, DS) of it by design (see _sample_count_for_closed_loop).
-    grade = np.abs(np.diff(z, append=z[0])) / DS
-
-    bad = grade > max_grade
-    if not np.any(bad):
-        return xyz
+def _smooth_flagged_runs(z: np.ndarray, bad_sample: np.ndarray, max_grade: float) -> np.ndarray:
+    """Shared expansion+interpolation engine for both `clip_implausible_grade`
+    and `smooth_self_crossing_regions`: replace each contiguous (periodic)
+    run of `bad_sample` indices with linear interpolation between trusted
+    neighbors just outside it, expanding those neighbors further out first
+    if a straight line between them would *itself* still exceed `max_grade`
+    (picking the immediate neighbors of a short flagged run is not enough
+    when the real height difference across it is large -- measured on real
+    Suzuka data, an abrupt ~6 m jump over just 1-2 samples; a short
+    interpolation across that is just as steep as the original)."""
+    n = len(z)
+    if not np.any(bad_sample):
+        return z
 
     def periodic_span(lo: int, hi: int) -> int:
         d = (hi - lo) % n
         return d if d != 0 else n
 
-    out = xyz.copy()
-    # Grow each bad *step* (i -> i+1) into a bad *sample* mask so both
-    # endpoints of an implausible step are candidates for replacement.
-    bad_sample = bad | np.roll(bad, 1)
+    out = z.copy()
     visited = np.zeros(n, dtype=bool)
     for start in range(n):
         if not bad_sample[start] or visited[start]:
@@ -393,16 +373,6 @@ def clip_implausible_grade(xyz: np.ndarray, max_grade: float = MAX_PLAUSIBLE_GRA
         if lo == hi:
             continue  # degenerate: no trusted neighbor outside the run
 
-        # A straight line from z[lo] to z[hi] must itself respect
-        # max_grade -- picking the *immediate* neighbors of a short bad
-        # run is not enough if the real height difference between the
-        # two sides is large (measured on real Suzuka data: an abrupt
-        # ~6 m jump over just 1-2 samples). Keep pulling lo/hi further
-        # out -- consuming what were originally "trusted" flat samples
-        # right next to the run -- until the span is long enough to carry
-        # that height difference at <= max_grade. This is what actually
-        # produces a physically plausible profile, not just one that
-        # merely lacks a single too-steep step.
         toggle = 0
         while periodic_span(lo, hi) * DS * max_grade + 1e-9 < abs(z[hi] - z[lo]):
             if periodic_span(lo, hi) >= n - 1:
@@ -426,7 +396,108 @@ def clip_implausible_grade(xyz: np.ndarray, max_grade: float = MAX_PLAUSIBLE_GRA
             continue
         for k, i in enumerate(idx):
             t = (k + 1) / (run_len + 1)
-            out[i, 2] = (1.0 - t) * z[lo] + t * z[hi]
+            out[i] = (1.0 - t) * z[lo] + t * z[hi]
+    return out
+
+
+def clip_implausible_grade(xyz: np.ndarray, max_grade: float = MAX_PLAUSIBLE_GRADE) -> np.ndarray:
+    """Replace any run of samples whose adjacent-sample grade exceeds
+    `max_grade` with smooth linear interpolation between its trusted
+    neighbors (periodic). `xyz` must be sampled at uniform DS spacing
+    (true of the reference line this runs on, before reparameterize_uniform).
+
+    General safety net (catches an implausible grade *wherever* it shows
+    up), kept alongside the more targeted `smooth_self_crossing_regions`:
+    see that function's docstring for why a course's grade-separated
+    crossovers specifically need geometric detection, not just a grade
+    threshold, to look right. Measured: normal grade stays within ~13%
+    even at the steepest genuine elevation changes on both Monaco and
+    Suzuka.
+    """
+    n = len(xyz)
+    z = xyz[:, 2]
+    # `s` is uniformly DS apart by construction (this runs on the reference
+    # line's own arc-length grid, before reparameterize_uniform) -- DS is a
+    # fine approximation even for the one closing step, which is within
+    # [0, DS) of it by design (see _sample_count_for_closed_loop).
+    grade = np.abs(np.diff(z, append=z[0])) / DS
+    bad = grade > max_grade
+    if not np.any(bad):
+        return xyz
+    # Grow each bad *step* (i -> i+1) into a bad *sample* mask so both
+    # endpoints of an implausible step are candidates for replacement.
+    bad_sample = bad | np.roll(bad, 1)
+    out = xyz.copy()
+    out[:, 2] = _smooth_flagged_runs(z, bad_sample, max_grade)
+    return out
+
+
+def find_self_crossing_regions(
+    ref_xyz: np.ndarray, min_s_gap_m: float = 800.0, close_xy_m: float = 60.0,
+) -> np.ndarray:
+    """Geometrically locate where the course's own horizontal path passes
+    close to a *different, far-away-in-s* part of itself -- a grade-
+    separated crossover (bridge/underpass), regardless of what its Z data
+    looks like. Returns a boolean mask over `ref_xyz`'s samples.
+
+    `min_s_gap_m` excludes ordinary tight corners (e.g. a hairpin's own
+    entry and exit lanes legitimately run close together over a much
+    smaller arc-length gap than a real course-spanning crossover -- 800 m
+    comfortably clears that while still catching a real crossover, whose
+    two arms are typically thousands of m apart in `s`).
+    """
+    n = len(ref_xyz)
+    min_gap_samples = int(round(min_s_gap_m / DS))
+    tree = cKDTree(ref_xyz[:, :2])
+    # k=8 is plenty of nearby-in-XY candidates to find one far away in s;
+    # a real crossover's other level is the dominant close match there.
+    dist, idx = tree.query(ref_xyz[:, :2], k=8)
+
+    mask = np.zeros(n, dtype=bool)
+    for i in range(n):
+        for k in range(1, dist.shape[1]):
+            j = int(idx[i, k])
+            if min(abs(i - j), n - abs(i - j)) < min_gap_samples:
+                continue
+            if dist[i, k] < close_xy_m:
+                mask[i] = True
+            break
+    return mask
+
+
+def smooth_self_crossing_regions(
+    ref_xyz: np.ndarray, xyz: np.ndarray, max_grade: float = 0.08,
+    min_s_gap_m: float = 800.0, close_xy_m: float = 60.0,
+) -> np.ndarray:
+    """Replace Z at geometrically-detected self-crossing regions (see
+    `find_self_crossing_regions`) with smooth interpolation from their
+    surroundings, at a stricter grade cap than `clip_implausible_grade`'s
+    general safety net.
+
+    Motivation (measured on real 2026 Suzuka race data, at one of its two
+    grade-separated crossovers): no per-lap or per-sample filter in
+    `project_laps`/`aggregate_centerline` reliably distinguishes a real
+    elevation transition from GPS-altitude contamination there, because
+    which lap-cluster is the majority genuinely flips from one 1 m sample
+    to the next across the transition -- not a single lap being wrong the
+    whole time, but the *dominant cluster itself* changing underfoot.
+    Filtering per-point or per-lap either misses a sustained wrong block
+    or turns a real transition into an erratic flip. A plain grade
+    threshold on the aggregated result (`clip_implausible_grade`) does
+    catch the worst of it, but can still leave a locally-plausible-looking
+    (just under the cap) transition that is visibly wrong compared to a
+    real reference elevation profile, which shows crossovers as part of a
+    long, gentle trend, not a compressed dip. Geometric detection sidesteps
+    all of that: it doesn't care what the Z data says, only where the
+    course's own plan-view path proves two unrelated `s` ranges must be
+    physically stacked -- so it can be smoothed with a deliberately
+    stricter cap without risking a false positive elsewhere on the course.
+    """
+    mask = find_self_crossing_regions(ref_xyz, min_s_gap_m, close_xy_m)
+    if not np.any(mask):
+        return xyz
+    out = xyz.copy()
+    out[:, 2] = _smooth_flagged_runs(xyz[:, 2], mask, max_grade)
     return out
 
 
@@ -478,11 +549,16 @@ def generate_centerline(
 
     d_buckets, z_buckets = project_laps(clean_laps, scale, ref_s, ref_xyz, ref_normal)
     candidate = aggregate_centerline(ref_s, ref_xyz, ref_normal, d_buckets, z_buckets)
+    # Geometric self-crossing detection first (targeted, stricter cap --
+    # see smooth_self_crossing_regions), then the general safety net for
+    # anything implausible elsewhere.
+    candidate = smooth_self_crossing_regions(ref_xyz, candidate)
     candidate = clip_implausible_grade(candidate)
     smoothed = smooth_periodic(candidate, sg_window, sg_polyorder)
     # Savitzky-Golay can reintroduce a little overshoot right at the edge
     # of a sharp correction (ordinary filter ringing); a second pass here
     # catches that residue without needing a wider first-pass correction.
+    smoothed = smooth_self_crossing_regions(ref_xyz, smoothed)
     smoothed = clip_implausible_grade(smoothed)
     final_s, final_xyz = reparameterize_uniform(smoothed, DS)
 

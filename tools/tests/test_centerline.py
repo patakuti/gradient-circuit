@@ -17,8 +17,10 @@ from gradient_circuit.centerline import (
     aggregate_centerline,
     clip_implausible_grade,
     compute_tangent_normal,
+    find_self_crossing_regions,
     project_laps,
     reparameterize_uniform,
+    smooth_self_crossing_regions,
     closure_error,
 )
 from gradient_circuit.laps import CleanLap
@@ -345,3 +347,51 @@ def test_clip_implausible_grade_leaves_a_fully_plausible_profile_untouched():
     xyz[:, 2] = 80.0 + 3.0 * np.sin(2 * np.pi * s / n)  # smooth, gentle wave
     out = clip_implausible_grade(xyz)
     assert out is xyz or np.allclose(out[:, 2], xyz[:, 2])
+
+
+def test_find_self_crossing_regions_locates_both_branches():
+    """`_make_crossover_reference` builds two far-apart-in-s branches that
+    run within ~1 m of each other in XY (see its docstring). Geometric
+    detection must flag samples near both, and nowhere else on this
+    otherwise-plain circle."""
+    ref_s, ref_xyz, _ = _make_crossover_reference()
+    n = len(ref_s)
+    i_a = _nearest_index(ref_xyz, np.array([0.0, -0.2]), (0, n // 2))
+    i_b = _nearest_index(ref_xyz, np.array([0.0, 0.2]), (n // 2, n))
+
+    mask = find_self_crossing_regions(ref_xyz, min_s_gap_m=200.0, close_xy_m=5.0)
+    assert mask[i_a] and mask[i_b], "both branches must be flagged"
+    # Comfortably far from either branch on this plain circle: nothing to flag.
+    assert not np.any(mask[(i_a + n // 4) % n - 5 : (i_a + n // 4) % n + 5])
+
+
+def test_smooth_self_crossing_regions_fixes_sustained_wrong_branch_block_geometrically():
+    """Regression guard for the real Suzuka case that a per-lap/per-sample
+    Z filter could not resolve (see smooth_self_crossing_regions'
+    docstring): geometric detection doesn't care that the majority itself
+    flips underfoot -- it flags the crossover from the course's own
+    horizontal shape and smooths Z there regardless of what the
+    aggregated data looks like."""
+    ref_s, ref_xyz, ref_normal = _make_crossover_reference()
+    n = len(ref_s)
+    i_a = _nearest_index(ref_xyz, np.array([0.0, -0.2]), (0, n // 2))
+
+    span = 45
+    good_laps = [_lap_tracing_branch(ref_s, ref_xyz, i_lo=i_a - span, i_hi=i_a + span) for _ in range(10)]
+    bad_lap = _lap_tracing_branch(ref_s, ref_xyz, i_lo=i_a - span, i_hi=i_a + span)
+    bad_lap.telemetry.loc[30:60, "Z"] = 20.0  # sustained wrong block
+
+    d_buckets, z_buckets = project_laps(
+        good_laps + [bad_lap], scale=1.0, ref_s=ref_s, ref_xyz=ref_xyz, ref_normal=ref_normal,
+    )
+    xyz = aggregate_centerline(ref_s, ref_xyz, ref_normal, d_buckets, z_buckets)
+    smoothed = smooth_self_crossing_regions(ref_xyz, xyz, max_grade=0.08, min_s_gap_m=200.0, close_xy_m=5.0)
+
+    # Only assert near branch A: branch B's own construction (a separate,
+    # unrelated part of this synthetic fixture) has its own steep ramp by
+    # design (see _make_crossover_reference) and isn't part of this check.
+    window = range(i_a - 20, i_a + 20)
+    grade = np.abs(np.diff(smoothed[list(window) + [window.stop % n], 2])) / DS
+    assert np.all(grade <= 0.08 + 1e-9)
+    for i in range(i_a - 3, i_a + 4):
+        assert smoothed[i, 2] == pytest.approx(0.0, abs=0.5), f"sample {i} should settle near the true elevation (0.0)"
