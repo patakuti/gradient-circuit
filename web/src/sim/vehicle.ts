@@ -28,6 +28,17 @@ export interface VehicleState {
 }
 
 /**
+ * Curvature-implied safe speed: the speed at which cornering at `curvature`
+ * demands exactly `maxLateralAccel` of lateral acceleration. Exported so
+ * audio/engine.ts (design 6.10) can derive the same "cornering grip
+ * exceeded" signal that drives `F_corner` below, without duplicating the
+ * formula.
+ */
+export function cornerSpeedLimit(curvature: number, maxLateralAccel: number): number {
+  return curvature === 0 ? Infinity : Math.sqrt(maxLateralAccel / Math.abs(curvature));
+}
+
+/**
  * Advances `state` by `dt` seconds. `grade` is the track grade (radians,
  * uphill positive, design 4.6/6.3) and `curvature` the signed curvature
  * (design 4.6/6.2), both sampled by the caller at the vehicle's *current*
@@ -62,9 +73,8 @@ export function stepVehicle(
   const rollForce = params.rollingResistance;
   const gravForce = params.mass * params.gravity * Math.sin(grade);
 
-  const cornerSpeedLimit =
-    curvature === 0 ? Infinity : Math.sqrt(params.maxLateralAccel / Math.abs(curvature));
-  const cornerForce = state.speed > cornerSpeedLimit ? params.mass * params.maxLateralAccel : 0;
+  const vLimit = cornerSpeedLimit(curvature, params.maxLateralAccel);
+  const cornerForce = state.speed > vLimit ? params.mass * params.maxLateralAccel : 0;
 
   const accel =
     (driveForce - brakeForce - dragForce - rollForce - gravForce - cornerForce) / params.mass;

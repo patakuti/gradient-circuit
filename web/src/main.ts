@@ -14,7 +14,7 @@ import { Track } from "./sim/track";
 import { buildTrackMesh } from "./render/trackMesh";
 import { buildBarriers } from "./render/barrier";
 import { setupEnvironment } from "./render/environment";
-import { stepVehicle, type VehicleState } from "./sim/vehicle";
+import { stepVehicle, cornerSpeedLimit, type VehicleState } from "./sim/vehicle";
 import { DEFAULT_VEHICLE_PARAMS } from "./sim/vehicleParams";
 import { KeyboardAxis, THROTTLE_KEYS, BRAKE_KEYS } from "./sim/input";
 import { normalize, cross } from "./sim/vec";
@@ -22,6 +22,7 @@ import { CameraManager } from "./camera/manager";
 import { ChaseRig } from "./camera/chaseRig";
 import { CockpitRig } from "./camera/cockpitRig";
 import type { VehiclePose } from "./camera/types";
+import { EngineAudio } from "./audio/engine";
 import { Hud } from "./ui/hud";
 import { createControls } from "./ui/controls";
 import { COURSE_CATALOG, DEFAULT_COURSE_ID } from "./course/catalog";
@@ -105,6 +106,7 @@ async function main() {
   const cameraManager = new CameraManager([new ChaseRig(), new CockpitRig()]);
   cameraManager.init(camera, poseFor(track, vehicle));
 
+  const engineAudio = new EngineAudio();
   const controls = createControls(
     document.body,
     cameraManager.list(),
@@ -112,11 +114,15 @@ async function main() {
     COURSE_CATALOG,
     COURSE_ID,
     selectCourse,
+    (muted) => engineAudio.setMuted(muted),
   );
   const hud = new Hud(document.body, DEBUG, course.meta.name);
 
   const throttle = new KeyboardAxis(THROTTLE_KEYS);
   const brake = new KeyboardAxis(BRAKE_KEYS);
+  // design 6.10: browsers keep a fresh AudioContext suspended until a user
+  // gesture resumes it, so start the engine sound on the first keypress.
+  window.addEventListener("keydown", () => engineAudio.start(), { once: true });
 
   let tPrev = performance.now();
   let accumulator = 0;
@@ -159,6 +165,13 @@ async function main() {
     controls.setActiveCamera(cameraManager.current.id);
 
     const sample = track.sampleAt(vehicle.s);
+    engineAudio.update({
+      speed: vehicle.speed,
+      throttle: throttle.read(),
+      brake: brake.read(),
+      cornerLimited:
+        vehicle.speed > cornerSpeedLimit(sample.curvature, DEFAULT_VEHICLE_PARAMS.maxLateralAccel),
+    });
     hud.update(
       {
         speedKmh: vehicle.speed * 3.6,

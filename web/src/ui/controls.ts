@@ -1,10 +1,10 @@
 /**
- * Camera-select + course-select controls.
+ * Camera-select + course-select + mute controls.
  *
- * Design ref: 02_design.md section 6.8. DOM-only -- takes and returns plain
- * data (camera ids/labels, a callback), never a `camera/` or `sim/` type,
- * so this module has no dependency on those layers. Throttle/brake are
- * keyboard-only (design 6.5) and have no UI element here.
+ * Design ref: 02_design.md section 6.8/6.10. DOM-only -- takes and returns
+ * plain data (camera ids/labels, callbacks), never a `camera/`, `sim/` or
+ * `audio/` type, so this module has no dependency on those layers.
+ * Throttle/brake are keyboard-only (design 6.5) and have no UI element here.
  */
 
 export interface CameraOption {
@@ -28,6 +28,7 @@ export function createControls(
   courseOptions: CourseOption[],
   activeCourseId: string,
   onCourseSelect: (id: string) => void,
+  onMuteToggle: (muted: boolean) => void,
 ): Controls {
   const root = document.createElement("div");
   root.style.cssText =
@@ -65,6 +66,16 @@ export function createControls(
   courseSelect.addEventListener("change", () => onCourseSelect(courseSelect.value));
   courseRow.appendChild(courseSelect);
   root.appendChild(courseRow);
+
+  let muted = false;
+  const muteButton = document.createElement("button");
+  muteButton.textContent = "mute";
+  muteButton.addEventListener("click", () => {
+    muted = !muted;
+    muteButton.textContent = muted ? "unmute" : "mute";
+    onMuteToggle(muted);
+  });
+  root.appendChild(muteButton);
 
   parent.appendChild(root);
 
