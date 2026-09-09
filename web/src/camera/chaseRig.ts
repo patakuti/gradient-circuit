@@ -1,8 +1,12 @@
 /**
- * Third-person chase camera: hovers behind and above the car, exponentially
- * smoothed so it doesn't rigidly track every bump.
+ * Third-person chase camera: rigidly holds a fixed offset behind and above
+ * the car.
  *
- * Design ref: 02_design.md section 6.6.
+ * Design ref: 02_design.md section 6.6. Previously used exponential
+ * position smoothing, but that produces a following distance proportional
+ * to speed (a first-order lag's steady-state offset is roughly v/k for a
+ * target moving at speed v) -- reported as an unwanted effect (P10), so the
+ * position is now set directly each frame instead.
  */
 
 import * as THREE from "three";
@@ -10,7 +14,6 @@ import type { CameraRig, VehiclePose } from "./types";
 
 const BACK_M = 7.5;
 const UP_M = 2.8;
-const SMOOTH_K = 6.0; // exponential smoothing rate, alpha = 1 - exp(-k * dt)
 
 function targetFor(pose: VehiclePose): THREE.Vector3 {
   const position = new THREE.Vector3(pose.position.x, pose.position.y, pose.position.z);
@@ -23,19 +26,12 @@ export class ChaseRig implements CameraRig {
   readonly id = "chase";
   readonly label = "Chase";
 
-  private smoothed: THREE.Vector3 | null = null;
-
-  reset(pose: VehiclePose): void {
-    this.smoothed = targetFor(pose);
+  reset(): void {
+    // Rigidly offset -- no smoothing state to reset.
   }
 
-  update(camera: THREE.PerspectiveCamera, pose: VehiclePose, dt: number): void {
-    const target = targetFor(pose);
-    if (!this.smoothed) this.smoothed = target;
-    const alpha = 1 - Math.exp(-SMOOTH_K * dt);
-    this.smoothed.lerp(target, alpha);
-
-    camera.position.copy(this.smoothed);
+  update(camera: THREE.PerspectiveCamera, pose: VehiclePose): void {
+    camera.position.copy(targetFor(pose));
     camera.up.set(pose.up.x, pose.up.y, pose.up.z);
     camera.lookAt(pose.position.x, pose.position.y, pose.position.z);
   }
