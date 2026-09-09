@@ -16,7 +16,7 @@ import { buildBarriers } from "./render/barrier";
 import { setupEnvironment } from "./render/environment";
 import { stepVehicle, type VehicleState } from "./sim/vehicle";
 import { DEFAULT_VEHICLE_PARAMS } from "./sim/vehicleParams";
-import { SliderThrottle, KeyboardThrottle, CombinedThrottle } from "./sim/input";
+import { KeyboardAxis, THROTTLE_KEYS, BRAKE_KEYS } from "./sim/input";
 import { normalize, cross } from "./sim/vec";
 import { CameraManager } from "./camera/manager";
 import { ChaseRig } from "./camera/chaseRig";
@@ -115,9 +115,8 @@ async function main() {
   );
   const hud = new Hud(document.body, DEBUG, course.meta.name);
 
-  const sliderThrottle = new SliderThrottle(controls.slider);
-  const keyboardThrottle = new KeyboardThrottle(sliderThrottle);
-  const throttle = new CombinedThrottle([sliderThrottle, keyboardThrottle]);
+  const throttle = new KeyboardAxis(THROTTLE_KEYS);
+  const brake = new KeyboardAxis(BRAKE_KEYS);
 
   let tPrev = performance.now();
   let accumulator = 0;
@@ -135,8 +134,17 @@ async function main() {
 
     const lapBefore = vehicle.lap;
     while (accumulator >= FIXED_DT) {
-      const grade = track.sampleAt(vehicle.s).grade;
-      vehicle = stepVehicle(vehicle, throttle.read(), grade, FIXED_DT, DEFAULT_VEHICLE_PARAMS, track.length);
+      const stepSample = track.sampleAt(vehicle.s);
+      vehicle = stepVehicle(
+        vehicle,
+        throttle.read(),
+        brake.read(),
+        stepSample.grade,
+        stepSample.curvature,
+        FIXED_DT,
+        DEFAULT_VEHICLE_PARAMS,
+        track.length,
+      );
       accumulator -= FIXED_DT;
       simTime += FIXED_DT;
     }
@@ -155,6 +163,7 @@ async function main() {
       {
         speedKmh: vehicle.speed * 3.6,
         throttlePercent: throttle.read() * 100,
+        brakePercent: brake.read() * 100,
         elevationM: pose.position.y,
         gradePercent: Math.sin(sample.grade) * 100,
         lap: vehicle.lap,
