@@ -227,6 +227,48 @@ def _project_point_to_window(
     return best_s, best_d
 
 
+def walk_lap_projection(
+    xy: np.ndarray, dist: np.ndarray, ref_s: np.ndarray, ref_xyz: np.ndarray, ref_normal: np.ndarray,
+    tree: cKDTree,
+):
+    """Sequentially project one lap's (already scaled) XY points onto the
+    reference line, yielding `(point_index, anchor_i, best_d)` for every
+    point that resolves within `MAX_PLAUSIBLE_OFFSET`.
+
+    This is the lap-continuity walking algorithm documented on
+    `project_laps` below, extracted so it exists in exactly one place.
+    `project_laps` uses it to bucket `d`/`Z` (design 4.4); `gripfit.py`
+    (design 4.9) uses the same walk to bucket `d`/`Speed` for the grip-model
+    fit, without duplicating the crossover-safe anchoring logic.
+    """
+    n = len(ref_s)
+    margin_samples = max(1, int(round(LOCAL_SEARCH_MARGIN_M / DS)))
+
+    anchor_i: int | None = None
+    anchor_dist: float | None = None
+    for pi in range(len(xy)):
+        if anchor_i is None:
+            _, i0 = tree.query(xy[pi])
+            center_i = int(i0)
+            window_samples = margin_samples
+        else:
+            step = abs(dist[pi] - anchor_dist)
+            window_samples = max(1, int(round(step / DS)) + margin_samples)
+            center_i = anchor_i
+
+        best_s, best_d = _project_point_to_window(
+            xy[pi], center_i, window_samples, ref_s, ref_xyz, ref_normal,
+        )
+
+        if abs(best_d) > MAX_PLAUSIBLE_OFFSET:
+            continue  # anchor unchanged; next step's window widens accordingly
+
+        anchor_i = int(round(best_s / DS)) % n
+        anchor_dist = dist[pi]
+
+        yield pi, anchor_i, best_d
+
+
 def project_laps(
     laps: list[CleanLap], scale: float, ref_s: np.ndarray, ref_xyz: np.ndarray, ref_normal: np.ndarray
 ) -> tuple[list[list[float]], list[list[float]]]:
@@ -284,35 +326,12 @@ def project_laps(
     tree = cKDTree(ref_xyz[:, :2])
     d_buckets: list[list[float]] = [[] for _ in range(n)]
     z_buckets: list[list[float]] = [[] for _ in range(n)]
-    margin_samples = max(1, int(round(LOCAL_SEARCH_MARGIN_M / DS)))
 
     for lap in laps:
         pts = lap.telemetry[["X", "Y", "Z"]].to_numpy(dtype=float) * scale
         dist = lap.telemetry["Distance"].to_numpy(dtype=float)
-        xy = pts[:, :2]
 
-        anchor_i: int | None = None
-        anchor_dist: float | None = None
-        for pi in range(len(pts)):
-            if anchor_i is None:
-                _, i0 = tree.query(xy[pi])
-                center_i = int(i0)
-                window_samples = margin_samples
-            else:
-                step = abs(dist[pi] - anchor_dist)
-                window_samples = max(1, int(round(step / DS)) + margin_samples)
-                center_i = anchor_i
-
-            best_s, best_d = _project_point_to_window(
-                xy[pi], center_i, window_samples, ref_s, ref_xyz, ref_normal,
-            )
-
-            if abs(best_d) > MAX_PLAUSIBLE_OFFSET:
-                continue  # anchor unchanged; next step's window widens accordingly
-
-            anchor_i = int(round(best_s / DS)) % n
-            anchor_dist = dist[pi]
-
+        for pi, anchor_i, best_d in walk_lap_projection(pts[:, :2], dist, ref_s, ref_xyz, ref_normal, tree):
             d_buckets[anchor_i].append(best_d)
             z_buckets[anchor_i].append(float(pts[pi, 2]))
 

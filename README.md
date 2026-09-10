@@ -76,7 +76,21 @@ cd tools
 uv run pytest
 ```
 
-FastF1 への通信を伴わない、幾何計算(曲率符号・弧長リサンプル・道幅クランプ・受け入れ基準判定)のユニットテストです。
+FastF1 への通信を伴わない、幾何計算(曲率符号・弧長リサンプル・道幅クランプ・受け入れ基準判定・グリップモデルのフィット)のユニットテストです。
+
+## 車両グリップモデルの実測フィット
+
+シミュレータの車両モデル(`web/src/sim/vehicleParams.ts`)が使うコーナリンググリップ限界は、定数ではなく実テレメトリからのフィット値です。速度依存(`a = min(a0 + k * v^2, a_cap)`、ダウンフォースの増加とタイヤ荷重感度による頭打ちを表す)で、コースデータ生成とは別のサブコマンドで測定します。
+
+```bash
+cd tools
+uv run gradient-circuit fit-grip
+```
+
+- 対象コースの `course/<id>.json`(先に `generate` で生成済みであること)へ、全クリーンラップの実速度を投影し、速度ビンごとの p95 包絡線に最小二乗フィットします。
+- コースは既定で `circuits.py` の全コースを対象にします。`--circuit` で絞り込み可能です。
+- 出力される `mechLateralAccel` / `aeroLateralCoeff` / `maxLateralAccelCap` を `web/src/sim/vehicleParams.ts` に反映します。
+- 実測結果と手法の詳細は `02_design.md` 4.9 章を参照してください。
 
 ## 別エンジンへの移植について
 
