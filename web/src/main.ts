@@ -44,6 +44,28 @@ const FIXED_DT = 1 / 120; // design 6.4: physics runs at a fixed timestep
 const MAX_FRAME_DT = 0.1; // clamp huge dt after e.g. a backgrounded tab
 const LOOKAHEAD_M = 25; // design 6.6: cockpitRig's corner look-ahead distance
 
+// Manual-mode-only steer shaping (design 6.3.7 follow-up): a driver
+// reported full-lock feeling too sharp/twitchy on keyboard. sim/vehicle.ts's
+// own steerRate can't be slowed to fix this -- it's shared with the auto
+// assist (design 6.14.4), and a sweep confirmed slowing it badly breaks the
+// assist's ability to track fast corners (Monaco's road-edge excursion
+// jumped from 0.76 m to 170+ m at steerRate=1.5). Instead, the raw -1/0/+1
+// key command is smoothed *before* it reaches stepVehicle, only in manual
+// mode -- vehicle.ts's own ramp (fast, auto-mode-tuned) then tracks this
+// already-gentle target closely, so the felt response is dominated by this
+// slower stage without touching the shared physical model. Full lock is
+// still reachable (unlike scaling the command's magnitude down), just
+// takes longer to ramp into -- preserves the ability to make the
+// tightest hairpin if committed to early.
+const MANUAL_STEER_SHAPE_RATE = 1.2; // 1/s, engaging
+const MANUAL_STEER_SHAPE_RETURN_RATE = 1.8; // 1/s, releasing
+
+function moveToward(current: number, target: number, maxDelta: number): number {
+  if (current < target) return Math.min(current + maxDelta, target);
+  if (current > target) return Math.max(current - maxDelta, target);
+  return current;
+}
+
 const DRIVE_MODE_OPTIONS: DriveModeOption[] = [
   { id: "auto", label: "Auto" },
   { id: "manual", label: "Manual" },
@@ -106,7 +128,6 @@ function poseFor(track: Track, state: VehicleState): VehiclePose {
   return {
     position,
     forward,
-    trackForward: sample.tangent,
     up: sample.up,
     right,
     lookahead,
@@ -152,7 +173,9 @@ async function main() {
     (id) => cameraManager.select(id),
     DRIVE_MODE_OPTIONS,
     (id) => {
-      driveMode = id === "manual" ? "manual" : "auto";
+      const next: DriveMode = id === "manual" ? "manual" : "auto";
+      if (next === "manual" && driveMode !== "manual") manualSteerShaped = vehicle.steer;
+      driveMode = next;
     },
     COURSE_CATALOG,
     COURSE_ID,
@@ -178,6 +201,7 @@ async function main() {
   // frame, not an OR across every step that ran, to avoid flicker when
   // multiple steps land in one frame.
   let lastGripExceeded = false;
+  let manualSteerShaped = 0; // manual-mode-only pre-ramp state, see MANUAL_STEER_SHAPE_RATE above
 
   function animate() {
     requestAnimationFrame(animate);
@@ -188,7 +212,9 @@ async function main() {
     accumulator += frameDt;
 
     if (modeTrigger.consume()) {
-      driveMode = driveMode === "auto" ? "manual" : "auto";
+      const next: DriveMode = driveMode === "auto" ? "manual" : "auto";
+      if (next === "manual") manualSteerShaped = vehicle.steer;
+      driveMode = next;
       controls.setActiveMode(driveMode);
     }
 
@@ -208,7 +234,11 @@ async function main() {
                 steer: assist.steer,
               };
             })()
-          : { throttle: throttle.read(), brake: brake.read(), steer: steerAxis.read() };
+          : (() => {
+              const shapeRate = steerAxis.read() === 0 ? MANUAL_STEER_SHAPE_RETURN_RATE : MANUAL_STEER_SHAPE_RATE;
+              manualSteerShaped = moveToward(manualSteerShaped, steerAxis.read(), shapeRate * FIXED_DT);
+              return { throttle: throttle.read(), brake: brake.read(), steer: manualSteerShaped };
+            })();
 
       const result = stepVehicle(
         vehicle,
