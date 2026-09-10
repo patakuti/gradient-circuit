@@ -12,11 +12,12 @@ import type { PerspectiveCamera } from "three";
 import type { Vec3 } from "../sim/vec";
 
 export interface VehiclePose {
-  position: Vec3;
-  forward: Vec3;
+  position: Vec3; // track.positionAt(s, lateralOffset) -- includes the lateral offset (design 6.6, P12)
+  forward: Vec3; // the car body's facing direction: the track tangent rotated by yaw (design 6.3.1)
+  trackForward: Vec3; // the track tangent itself, with no yaw applied (design 6.6, P12)
   up: Vec3;
   right: Vec3;
-  lookahead: Vec3; // position on the track ~25 m ahead, for cockpit corner look-ahead
+  lookahead: Vec3; // position on the track ~25 m ahead (same lateral offset), for cockpit corner look-ahead
   speed: number;
   s: number;
   lap: number;

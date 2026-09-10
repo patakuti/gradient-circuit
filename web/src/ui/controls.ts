@@ -1,13 +1,19 @@
 /**
- * Camera-select + course-select + mute controls.
+ * Camera-select + drive-mode-select + course-select + mute controls.
  *
- * Design ref: 02_design.md section 6.8/6.10. DOM-only -- takes and returns
- * plain data (camera ids/labels, callbacks), never a `camera/`, `sim/` or
+ * Design ref: 02_design.md section 6.8/6.10/6.14.5. DOM-only -- takes and
+ * returns plain data (ids/labels, callbacks), never a `camera/`, `sim/` or
  * `audio/` type, so this module has no dependency on those layers.
- * Throttle/brake are keyboard-only (design 6.5) and have no UI element here.
+ * Throttle/brake/steer are keyboard-only (design 6.5) and have no UI
+ * element here.
  */
 
 export interface CameraOption {
+  id: string;
+  label: string;
+}
+
+export interface DriveModeOption {
   id: string;
   label: string;
 }
@@ -19,12 +25,15 @@ export interface CourseOption {
 
 export interface Controls {
   setActiveCamera(id: string): void;
+  setActiveMode(id: string): void;
 }
 
 export function createControls(
   parent: HTMLElement,
   cameraOptions: CameraOption[],
   onCameraSelect: (id: string) => void,
+  driveModeOptions: DriveModeOption[],
+  onDriveModeSelect: (id: string) => void,
   courseOptions: CourseOption[],
   activeCourseId: string,
   onCourseSelect: (id: string) => void,
@@ -48,6 +57,22 @@ export function createControls(
   select.addEventListener("change", () => onCameraSelect(select.value));
   cameraRow.appendChild(select);
   root.appendChild(cameraRow);
+
+  // Drive mode: a live toggle like the camera select (not a navigation
+  // like course select), per design 6.14.5.
+  const modeRow = document.createElement("label");
+  modeRow.style.cssText = "display:flex;align-items:center;gap:8px;";
+  modeRow.textContent = "mode";
+  const modeSelect = document.createElement("select");
+  for (const option of driveModeOptions) {
+    const el = document.createElement("option");
+    el.value = option.id;
+    el.textContent = option.label;
+    modeSelect.appendChild(el);
+  }
+  modeSelect.addEventListener("change", () => onDriveModeSelect(modeSelect.value));
+  modeRow.appendChild(modeSelect);
+  root.appendChild(modeRow);
 
   const courseRow = document.createElement("label");
   courseRow.style.cssText = "display:flex;align-items:center;gap:8px;";
@@ -82,6 +107,9 @@ export function createControls(
   return {
     setActiveCamera(id: string) {
       if (select.value !== id) select.value = id;
+    },
+    setActiveMode(id: string) {
+      if (modeSelect.value !== id) modeSelect.value = id;
     },
   };
 }

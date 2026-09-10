@@ -17,9 +17,14 @@ const UP_M = 2.8;
 
 function targetFor(pose: VehiclePose): THREE.Vector3 {
   const position = new THREE.Vector3(pose.position.x, pose.position.y, pose.position.z);
-  const forward = new THREE.Vector3(pose.forward.x, pose.forward.y, pose.forward.z);
+  // The boom uses the track's own direction, not the car body's yawed
+  // heading (design 6.6, P12): with steering, `forward` can swing up to
+  // maxYaw off the track's line, and a boom anchored to it would swing the
+  // camera around on every correction -- like a real chase/onboard camera
+  // rigged to the course, not the chassis.
+  const trackForward = new THREE.Vector3(pose.trackForward.x, pose.trackForward.y, pose.trackForward.z);
   const up = new THREE.Vector3(pose.up.x, pose.up.y, pose.up.z);
-  return position.addScaledVector(forward, -BACK_M).addScaledVector(up, UP_M);
+  return position.addScaledVector(trackForward, -BACK_M).addScaledVector(up, UP_M);
 }
 
 export class ChaseRig implements CameraRig {

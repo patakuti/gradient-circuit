@@ -10,7 +10,11 @@ export interface VehicleAudioState {
   speed: number; // [m/s]
   throttle: number; // [0, 1]
   brake: number; // [0, 1]
-  cornerLimited: boolean; // sim/vehicle.ts's cornerSpeedLimit exceeded (design 6.3)
+  // sim/vehicle.ts's stepVehicle() result (design 6.3.3/6.11): true while
+  // understeering (the demanded turn exceeds grip). Replaces P8's
+  // "auto-braking active" condition now that grip overshoot no longer
+  // triggers an automatic slowdown.
+  gripExceeded: boolean;
 }
 
 const NOISE_BUFFER_SECONDS = 2;
@@ -130,6 +134,6 @@ export class EngineAudio {
     // on/off, so there's no click as speed crosses the threshold.
     const brakeSpeedFactor = Math.min(1, state.speed / BRAKE_SOUND_MIN_SPEED);
     this.brakeGain.gain.setTargetAtTime(state.brake * 0.2 * brakeSpeedFactor, now, PARAM_SMOOTHING_S);
-    this.cornerGain.gain.setTargetAtTime(state.cornerLimited ? 0.25 : 0, now, PARAM_SMOOTHING_S);
+    this.cornerGain.gain.setTargetAtTime(state.gripExceeded ? 0.25 : 0, now, PARAM_SMOOTHING_S);
   }
 }
