@@ -52,3 +52,62 @@ export function createAsphaltTexture(): THREE.CanvasTexture {
 function clampByte(v: number): number {
   return Math.max(0, Math.min(255, v));
 }
+
+/**
+ * Window-grid building facade, used by render/cityScenery.ts for Monaco's
+ * skyline (design 6.12). A shared base texture is cloned per building so
+ * each can set its own `.repeat` without affecting the others.
+ */
+export function createWindowTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = TEXTURE_SIZE;
+  canvas.height = TEXTURE_SIZE;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("2D canvas context unavailable");
+
+  ctx.fillStyle = "#4a4a52";
+  ctx.fillRect(0, 0, TEXTURE_SIZE, TEXTURE_SIZE);
+
+  const cols = 8;
+  const rows = 12;
+  const cellW = TEXTURE_SIZE / cols;
+  const cellH = TEXTURE_SIZE / rows;
+  const marginW = cellW * 0.18;
+  const marginH = cellH * 0.18;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      ctx.fillStyle = Math.random() < 0.35 ? "#f2e6b0" : "#26262c";
+      ctx.fillRect(c * cellW + marginW, r * cellH + marginH, cellW - marginW * 2, cellH - marginH * 2);
+    }
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+/**
+ * Alternating red/white curb stripe, used by render/circuitScenery.ts for
+ * Suzuka (design 6.12). Tiles along the strip's length via `.repeat.y`
+ * (set by the caller, same convention as the asphalt texture's `v = s/10`).
+ */
+export function createCurbTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = TEXTURE_SIZE;
+  canvas.height = TEXTURE_SIZE;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("2D canvas context unavailable");
+
+  ctx.fillStyle = "#c81e2c";
+  ctx.fillRect(0, 0, TEXTURE_SIZE, TEXTURE_SIZE);
+  ctx.fillStyle = "#e8e8e0";
+  ctx.fillRect(0, 0, TEXTURE_SIZE, TEXTURE_SIZE / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
