@@ -15,6 +15,7 @@ import { buildTrackMesh } from "./render/trackMesh";
 import { buildBarriers } from "./render/barrier";
 import { setupEnvironment } from "./render/environment";
 import { buildVehicleMesh } from "./render/vehicleMesh";
+import { buildScenery } from "./render/scenery";
 import { stepVehicle, cornerSpeedLimit, type VehicleState } from "./sim/vehicle";
 import { DEFAULT_VEHICLE_PARAMS } from "./sim/vehicleParams";
 import { KeyboardAxis, THROTTLE_KEYS, BRAKE_KEYS } from "./sim/input";
@@ -100,7 +101,13 @@ async function main() {
   const track = Track.from(course);
   setupEnvironment(scene, track);
   scene.add(buildTrackMesh(track));
-  scene.add(buildBarriers(track));
+  const courseOption = COURSE_CATALOG.find((option) => option.id === COURSE_ID) ?? COURSE_CATALOG[0];
+  // design 6.7/6.12: the plain guardrail barrier is a stand-in for a street
+  // course's real Armco (Monaco); a permanent circuit's curb/grass/trees
+  // (render/circuitScenery.ts) already serve that role, so skip the
+  // redundant grey wall there.
+  if (courseOption.kind === "street") scene.add(buildBarriers(track));
+  scene.add(buildScenery(track, courseOption));
   const vehicleMesh = buildVehicleMesh();
   scene.add(vehicleMesh);
 
