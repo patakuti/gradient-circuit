@@ -52,9 +52,25 @@ from .laps import CleanLap
 DS = 1.0  # target sample spacing [m], per design 4.4 step 2
 
 # Savitzky-Golay defaults per design 4.4 step 6; window is in *samples*
-# (samples are 1 m apart, so window=51 means a 51 m smoothing window).
-# Final values are set from the measured GPS noise level (see measure_noise).
-DEFAULT_SG_WINDOW = 51
+# (samples are 1 m apart, so window=31 means a 31 m smoothing window).
+#
+# Originally 51 m. Revised down to 31 m (P12 follow-up, design 4.4/6.14
+# addendum) after real play surfaced that the auto-drive assist wasn't
+# taking a good line through Monaco's Piscine chicanes. Measured: the
+# 51 m window was flattening real, if modest, lateral racing-line
+# movement there (the median-of-all-laps position swings roughly +-1 m
+# over that chicane) along with genuine GPS/aggregation noise. A window
+# sweep (51/31/21/15/11/9/7) found 31 is as far as this can be narrowed
+# without breaking acceptance criterion #5 (adjacent-sample curvature
+# jump < 0.05 1/m) -- 21 already fails it course-wide (0.21), and windows
+# below ~15 make the Savitzky-Golay fit itself numerically unstable on
+# this noisy input (adjacent-jump blows up to double digits). 31 keeps a
+# safety margin (measured max adjacent jump 0.036, course-wide) while
+# retaining more of the real chicane movement than 51 did. This is a
+# validated, measured improvement, not a full fix -- see design 4.4's
+# addendum for what a proper fix (curvature-adaptive window) would need
+# and why it was not attempted here.
+DEFAULT_SG_WINDOW = 31
 DEFAULT_SG_POLYORDER = 3
 
 CLOSURE_TOLERANCE = DS  # design 4.4 step 7: gap must be < 1.0 m

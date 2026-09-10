@@ -42,14 +42,20 @@ const CORNER_MARGIN = 0.85; // fraction of lateral grip the assist targets, leav
 // symmetric 0.85 counterpart on purpose: an in-browser sweep (P12.3) found
 // Monaco's Grand Hotel Hairpin (curvature ~0.12-0.15, the tightest corner
 // on either course) briefly pushes past the road edge under full-throttle
-// auto driving at 0.8 (measured excess 1.10 m); 0.65 cuts that to 0.76 m
-// for a 0.9 s lap-time cost, with no measurable effect on Suzuka (which
-// never approaches its own edges). Steer-rate was swept too and had no
-// effect on the excess -- confirming this is a braking margin issue, not
-// a steering-lag one. The residual ~0.76 m at this one corner is a known
-// limit of a simple margin-based controller at the tightest curve in
-// either course; P13 (surface/wall) should watch for it.
-const BRAKE_MARGIN = 0.65;
+// auto driving at 0.8 (measured excess 1.10 m); lowering this margin cuts
+// that excess, at a lap-time cost, with no measurable effect on Suzuka
+// (which never approaches its own edges). Steer-rate was swept too and
+// had no effect on the excess -- confirming this is a braking margin
+// issue, not a steering-lag one. Re-measured and re-tuned after the P1
+// course-generation smoothing window changed (design 4.4, 51m -> 31m,
+// to stop flattening real chicane movement): the narrower window made
+// the hairpin's approach curvature a little more demanding, pushing the
+// excess at the old 0.65 back up to 1.16 m. 0.45 brings it down to
+// 0.86 m for a further ~1.5 s lap-time cost (Monaco: 76.7 -> 79.9 s).
+// The residual ~0.86 m at this one corner is a known limit of a simple
+// margin-based controller at the tightest curve in either course; P13
+// (surface/wall) should watch for it.
+const BRAKE_MARGIN = 0.45;
 const BRAKE_BAND_MPS = 3; // speed above target over which brake ramps 0->1, avoiding an on/off step
 const SCAN_STEP_M = 1; // matches track.ds (design 6.14.3): worst case ~500 samples/step, cheap
 
