@@ -73,6 +73,24 @@ DS = 1.0  # target sample spacing [m], per design 4.4 step 2
 DEFAULT_SG_WINDOW = 31
 DEFAULT_SG_POLYORDER = 3
 
+# Elevation (Z) gets its own, wider window than X/Y (P12 follow-up, real-play
+# feedback: a small but perceptible washboard-like ripple in the vertical
+# profile around Monaco's Massenet exit, s~790m -- grade changing sign every
+# few meters on what should be a smooth climb). Curvature (accept. criterion
+# #5) is an X/Y-only quantity, so widening Z alone carries none of
+# DEFAULT_SG_WINDOW's continuity risk; the only real constraint is criterion
+# #2 (elevation delta within 15% of target). Measured a window sweep
+# (31/41/51/61/81/101) on real Monaco/Suzuka data: at 61, the Massenet-exit
+# grade roughness (local jump RMS) drops from 0.30 deg to 0.16 deg (-47%)
+# while genuine elevation features barely move -- Monaco's steepest real
+# grade (tunnel entry) only eases 10.4% -> 9.8%, its Massenet climb itself
+# only shrinks 1.46m -> 1.34m, and course elevation-delta deviation from
+# target stays under 5% (both circuits, criterion #2 allows 15%). 61 was
+# chosen as a moderate widening (about 2x DEFAULT_SG_WINDOW) rather than the
+# more aggressive end of the sweep (81/101 reduce the ripple further but
+# were not needed to bring it back in line with the rest of the course).
+DEFAULT_SG_WINDOW_Z = 61
+
 CLOSURE_TOLERANCE = DS  # design 4.4 step 7: gap must be < 1.0 m
 
 # Reject projected lateral offsets beyond this magnitude before they reach
@@ -536,10 +554,18 @@ def smooth_self_crossing_regions(
     return out
 
 
-def smooth_periodic(xyz: np.ndarray, window: int, polyorder: int) -> np.ndarray:
+def smooth_periodic(
+    xyz: np.ndarray, window: int, polyorder: int, z_window: int | None = None,
+) -> np.ndarray:
+    """Periodic Savitzky-Golay smoothing. `z_window` lets the elevation (Z)
+    axis use a different, typically wider, window than X/Y -- see
+    `DEFAULT_SG_WINDOW_Z`'s docstring for why. Defaults to `window` (same
+    width on all three axes) when omitted.
+    """
     out = np.empty_like(xyz)
-    for axis in range(3):
+    for axis in range(2):
         out[:, axis] = savgol_filter(xyz[:, axis], window, polyorder, mode="wrap")
+    out[:, 2] = savgol_filter(xyz[:, 2], z_window if z_window is not None else window, polyorder, mode="wrap")
     return out
 
 
@@ -577,6 +603,7 @@ def generate_centerline(
     scale: float,
     sg_window: int = DEFAULT_SG_WINDOW,
     sg_polyorder: int = DEFAULT_SG_POLYORDER,
+    sg_window_z: int = DEFAULT_SG_WINDOW_Z,
 ) -> dict:
     """Run the full centerline pipeline. Returns a dict of arrays/diagnostics."""
     ref_s, ref_xyz = build_reference_line(fastest, scale)
@@ -589,7 +616,7 @@ def generate_centerline(
     # anything implausible elsewhere.
     candidate = smooth_self_crossing_regions(ref_xyz, candidate)
     candidate = clip_implausible_grade(candidate)
-    smoothed = smooth_periodic(candidate, sg_window, sg_polyorder)
+    smoothed = smooth_periodic(candidate, sg_window, sg_polyorder, z_window=sg_window_z)
     # Savitzky-Golay can reintroduce a little overshoot right at the edge
     # of a sharp correction (ordinary filter ringing); a second pass here
     # catches that residue without needing a wider first-pass correction.
