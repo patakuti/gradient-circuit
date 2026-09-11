@@ -35,6 +35,8 @@ export interface VehicleParams {
   steerReturnRate: number; // [1/s] how fast it self-centers when released
   steerGripFactor: number; // [-] how much of lateralGripAt(v) full lock may demand
   maxYaw: number; // [rad] hard cap on |yaw|, structurally rules out spin/reverse (requirement 2.2)
+
+  vehicleHalfWidth: number; // [m] half the body's widest point, for wall contact (design 6.3.5)
 }
 
 export interface VehicleState {
@@ -177,9 +179,14 @@ export function stepVehicle(
 
   // --- Wall contact (design 6.3.5): project the velocity onto the wall
   // direction instead of an arbitrary deceleration constant -- a shallow
-  // contact angle barely slows the car, a steep one sheds most of its speed. ---
-  if (Math.abs(lateralOffset) > surface.maxLateralOffset) {
-    lateralOffset = clamp(lateralOffset, -surface.maxLateralOffset, surface.maxLateralOffset);
+  // contact angle barely slows the car, a steep one sheds most of its speed.
+  // The stop point is offset inward by vehicleHalfWidth (P13.2 follow-up)
+  // so the visible body's outer edge -- not its center point -- is what
+  // reaches the wall; without this the center stops exactly at the wall and
+  // the wider body clips half into it. ---
+  const wallOffset = Math.max(0, surface.maxLateralOffset - params.vehicleHalfWidth);
+  if (Math.abs(lateralOffset) > wallOffset) {
+    lateralOffset = clamp(lateralOffset, -wallOffset, wallOffset);
     speedAfterWall = speed * Math.abs(Math.cos(yaw)) * WALL_FRICTION_FACTOR;
     yaw = 0;
     wallContact = true;

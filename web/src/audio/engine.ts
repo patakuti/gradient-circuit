@@ -15,11 +15,32 @@ export interface VehicleAudioState {
   // "auto-braking active" condition now that grip overshoot no longer
   // triggers an automatic slowdown.
   gripExceeded: boolean;
+  // Off-course surface (design 6.13, P13 follow-up). Plain booleans rather
+  // than sim/surface.ts's SurfaceKind -- this module has no sim/ import
+  // (design 6.1), so main.ts derives these from surfaceAt()'s result.
+  onCurb: boolean;
+  onGrass: boolean;
+  wallContact: boolean;
 }
 
 const NOISE_BUFFER_SECONDS = 2;
 const PARAM_SMOOTHING_S = 0.05; // avoids clicks from per-frame AudioParam updates
 const BRAKE_SOUND_MIN_SPEED = 3; // [m/s] (~11 km/h); brake sound fades to 0 below this
+
+// Curb rumble (design 6.13/6.11, P13 follow-up): a periodic thump rather
+// than steady noise, since a real curb is a row of raised stripes, not a
+// continuous surface. The LFO's period is tied to speed so the thump rate
+// matches how fast the stripes actually pass under the car; the 4 m period
+// matches render/circuitScenery.ts's CURB_TILE_M (kept as a separate
+// constant here -- design 6.1 keeps audio/ independent of render/, so this
+// is a second copy, not a shared import).
+const CURB_BUMP_PERIOD_M = 4;
+const CURB_BASE_LEVEL = 0.08;
+const CURB_LFO_DEPTH = 0.08;
+const GRASS_BASE_LEVEL = 0.08;
+const GRASS_SPEED_LEVEL = 0.12; // additional level at high speed
+const GRASS_SPEED_REF = 30; // [m/s] speed at which the speed-dependent term saturates
+const WALL_LEVEL = 0.3;
 
 function createNoiseBuffer(ctx: AudioContext): AudioBuffer {
   const length = Math.floor(ctx.sampleRate * NOISE_BUFFER_SECONDS);
@@ -50,6 +71,11 @@ export class EngineAudio {
   private engineGain: GainNode | null = null;
   private brakeGain: GainNode | null = null;
   private cornerGain: GainNode | null = null;
+  private curbLfo: OscillatorNode | null = null;
+  private curbToneGain: GainNode | null = null;
+  private curbLfoGain: GainNode | null = null;
+  private grassGain: GainNode | null = null;
+  private wallGain: GainNode | null = null;
   private muted = false;
 
   /**
@@ -113,6 +139,62 @@ export class EngineAudio {
     cornerGain.connect(masterGain);
     cornerSource.start();
     this.cornerGain = cornerGain;
+
+    // Curb: filtered noise (a dull thud, not the corner scrub's bandpass
+    // hiss) whose gain is tremolo'd by an LFO -- an oscillator connected
+    // directly to a GainNode's `.gain` AudioParam adds its waveform to the
+    // param's own value each sample, so this needs no extra scheduling.
+    const curbSource = createNoiseLoop(ctx, noiseBuffer);
+    const curbFilter = ctx.createBiquadFilter();
+    curbFilter.type = "lowpass";
+    curbFilter.frequency.value = 400;
+    const curbToneGain = ctx.createGain();
+    curbToneGain.gain.value = 0;
+    curbSource.connect(curbFilter);
+    curbFilter.connect(curbToneGain);
+    curbToneGain.connect(masterGain);
+    curbSource.start();
+    this.curbToneGain = curbToneGain;
+
+    const curbLfo = ctx.createOscillator();
+    curbLfo.type = "sine";
+    curbLfo.frequency.value = 1;
+    const curbLfoGain = ctx.createGain();
+    curbLfoGain.gain.value = 0;
+    curbLfo.connect(curbLfoGain);
+    curbLfoGain.connect(curbToneGain.gain);
+    curbLfo.start();
+    this.curbLfo = curbLfo;
+    this.curbLfoGain = curbLfoGain;
+
+    // Grass: steady low-passed noise, louder at speed (rolling through
+    // grass gets noisier the faster the car is moving through it).
+    const grassSource = createNoiseLoop(ctx, noiseBuffer);
+    const grassFilter = ctx.createBiquadFilter();
+    grassFilter.type = "lowpass";
+    grassFilter.frequency.value = 300;
+    const grassGain = ctx.createGain();
+    grassGain.gain.value = 0;
+    grassSource.connect(grassFilter);
+    grassFilter.connect(grassGain);
+    grassGain.connect(masterGain);
+    grassSource.start();
+    this.grassGain = grassGain;
+
+    // Wall contact: a grittier mid-band scrape, distinct from both the
+    // brake's highpass squeal and the corner scrub's bandpass hiss.
+    const wallSource = createNoiseLoop(ctx, noiseBuffer);
+    const wallFilter = ctx.createBiquadFilter();
+    wallFilter.type = "bandpass";
+    wallFilter.frequency.value = 1200;
+    wallFilter.Q.value = 1.5;
+    const wallGain = ctx.createGain();
+    wallGain.gain.value = 0;
+    wallSource.connect(wallFilter);
+    wallFilter.connect(wallGain);
+    wallGain.connect(masterGain);
+    wallSource.start();
+    this.wallGain = wallGain;
   }
 
   setMuted(muted: boolean): void {
@@ -123,7 +205,20 @@ export class EngineAudio {
 
   update(state: VehicleAudioState): void {
     const ctx = this.ctx;
-    if (!ctx || !this.engineOsc || !this.engineGain || !this.brakeGain || !this.cornerGain) return;
+    if (
+      !ctx ||
+      !this.engineOsc ||
+      !this.engineGain ||
+      !this.brakeGain ||
+      !this.cornerGain ||
+      !this.curbLfo ||
+      !this.curbToneGain ||
+      !this.curbLfoGain ||
+      !this.grassGain ||
+      !this.wallGain
+    ) {
+      return;
+    }
     if (ctx.state === "suspended") void ctx.resume();
 
     const now = ctx.currentTime;
@@ -135,5 +230,18 @@ export class EngineAudio {
     const brakeSpeedFactor = Math.min(1, state.speed / BRAKE_SOUND_MIN_SPEED);
     this.brakeGain.gain.setTargetAtTime(state.brake * 0.2 * brakeSpeedFactor, now, PARAM_SMOOTHING_S);
     this.cornerGain.gain.setTargetAtTime(state.gripExceeded ? 0.25 : 0, now, PARAM_SMOOTHING_S);
+
+    this.curbLfo.frequency.setTargetAtTime(Math.max(0.5, state.speed / CURB_BUMP_PERIOD_M), now, PARAM_SMOOTHING_S);
+    this.curbToneGain.gain.setTargetAtTime(state.onCurb ? CURB_BASE_LEVEL : 0, now, PARAM_SMOOTHING_S);
+    this.curbLfoGain.gain.setTargetAtTime(state.onCurb ? CURB_LFO_DEPTH : 0, now, PARAM_SMOOTHING_S);
+
+    const grassSpeedFactor = Math.min(1, state.speed / GRASS_SPEED_REF);
+    this.grassGain.gain.setTargetAtTime(
+      state.onGrass ? GRASS_BASE_LEVEL + GRASS_SPEED_LEVEL * grassSpeedFactor : 0,
+      now,
+      PARAM_SMOOTHING_S,
+    );
+
+    this.wallGain.gain.setTargetAtTime(state.wallContact ? WALL_LEVEL : 0, now, PARAM_SMOOTHING_S);
   }
 }

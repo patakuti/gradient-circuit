@@ -17,9 +17,10 @@ import { buildBarriers } from "./render/barrier";
 import { setupEnvironment } from "./render/environment";
 import { buildVehicleMesh } from "./render/vehicleMesh";
 import { buildScenery } from "./render/scenery";
-import { ASPHALT_SURFACE, stepVehicle, type VehicleInput, type VehicleState } from "./sim/vehicle";
+import { resetVehicle, stepVehicle, type VehicleInput, type VehicleState } from "./sim/vehicle";
 import { DEFAULT_VEHICLE_PARAMS } from "./sim/vehicleParams";
 import { computeAssist, type DriveMode } from "./sim/autopilot";
+import { surfaceAt, type SurfaceKind } from "./sim/surface";
 import {
   KeyboardAxis,
   KeyboardBipolarAxis,
@@ -29,6 +30,7 @@ import {
   STEER_LEFT_KEYS,
   STEER_RIGHT_KEYS,
   MODE_KEYS,
+  RESET_KEYS,
 } from "./sim/input";
 import { normalize, cross, rotateAroundAxis } from "./sim/vec";
 import { CameraManager } from "./camera/manager";
@@ -168,11 +170,12 @@ async function main() {
   setupEnvironment(scene, track);
   scene.add(buildTrackMesh(track));
   const courseOption = COURSE_CATALOG.find((option) => option.id === COURSE_ID) ?? COURSE_CATALOG[0];
-  // design 6.7/6.12: the plain guardrail barrier is a stand-in for a street
-  // course's real Armco (Monaco); a permanent circuit's curb/grass/trees
-  // (render/circuitScenery.ts) already serve that role, so skip the
-  // redundant grey wall there.
-  if (courseOption.kind === "street") scene.add(buildBarriers(track));
+  // design 6.13.3/6.7 (P13 follow-up): the barrier is now drawn for every
+  // course kind, at sim/surface.ts's barrierOffsetAt() -- for a permanent
+  // circuit that's a full grass-width beyond the curb/grass/trees (render/
+  // circuitScenery.ts), not right next to them, so it reads as a distant
+  // boundary rather than the redundant grey wall P11 removed.
+  scene.add(buildBarriers(track, courseOption.kind));
   scene.add(buildScenery(track, courseOption));
   const vehicleMesh = buildVehicleMesh();
   scene.add(vehicleMesh);
@@ -219,6 +222,7 @@ async function main() {
   const brake = new KeyboardAxis(BRAKE_KEYS);
   const steerAxis = new KeyboardBipolarAxis(STEER_LEFT_KEYS, STEER_RIGHT_KEYS);
   const modeTrigger = new KeyTrigger(MODE_KEYS);
+  const resetTrigger = new KeyTrigger(RESET_KEYS);
   // design 6.11: browsers keep a fresh AudioContext suspended until a user
   // gesture resumes it, so start the engine sound on the first keypress.
   window.addEventListener("keydown", () => engineAudio.start(), { once: true });
@@ -232,6 +236,15 @@ async function main() {
   // frame, not an OR across every step that ran, to avoid flicker when
   // multiple steps land in one frame.
   let lastGripExceeded = false;
+  let lastSurfaceKind: SurfaceKind = "asphalt";
+  // Separate from lastSurfaceKind: surfaceAt() classifies by the vehicle's
+  // *center* position, but stepVehicle's wall stop is now offset inward by
+  // vehicleHalfWidth (design 6.3.5 follow-up) so the body's outer edge, not
+  // its center, reaches the wall -- meaning the center often never crosses
+  // into surfaceAt's own "wall" band. wallContact is the actual contact
+  // event from the physics step, so it -- not surface.kind -- is the right
+  // signal for "currently at the wall".
+  let lastWallContact = false;
   let shapedSteer = 0; // driver-steer pre-ramp state ("manual"/"assist" only), see MANUAL_STEER_SHAPE_RATE above
 
   function animate() {
@@ -246,16 +259,23 @@ async function main() {
       enterDriverSteeredMode(nextDriveMode(driveMode));
       controls.setActiveMode(driveMode);
     }
+    if (resetTrigger.consume()) {
+      vehicle = resetVehicle(vehicle); // design 6.3.6: keeps s/lap, zeroes the rest
+      shapedSteer = 0;
+    }
 
     const lapBefore = vehicle.lap;
     while (accumulator >= FIXED_DT) {
       const stepSample = track.sampleAt(vehicle.s);
+      // design 6.4/6.13: surface is read fresh every physics step (not once
+      // per frame) so a fast pass across the road edge can't skip it.
+      const surface = surfaceAt(courseOption.kind, stepSample, vehicle.lateralOffset);
       // design 6.14.1: the assist never bypasses the vehicle model -- its
       // output is mixed into the same VehicleInput a human's keys produce,
       // so it is subject to the same steer-rate ramp and grip limits.
       const input: VehicleInput = (() => {
         if (driveMode === "auto") {
-          const assist = computeAssist(track, vehicle, DEFAULT_VEHICLE_PARAMS, ASPHALT_SURFACE);
+          const assist = computeAssist(track, vehicle, DEFAULT_VEHICLE_PARAMS, surface);
           return {
             throttle: assist.throttleCut ? 0 : throttle.read(),
             brake: Math.max(brake.read(), assist.brake),
@@ -271,7 +291,7 @@ async function main() {
         // driver's own (already-shaped) input instead of replacing it --
         // throttle stays fully the driver's, brake only ever adds on top of
         // the driver's own braking, steer is a straight lerp by strength.
-        const assist = computeAssist(track, vehicle, DEFAULT_VEHICLE_PARAMS, ASPHALT_SURFACE);
+        const assist = computeAssist(track, vehicle, DEFAULT_VEHICLE_PARAMS, surface);
         return {
           throttle: throttle.read(),
           brake: Math.max(brake.read(), assistStrength * assist.brake),
@@ -284,13 +304,15 @@ async function main() {
         input,
         stepSample.grade,
         stepSample.curvature,
-        ASPHALT_SURFACE, // P13 replaces this with sim/surface.ts's surfaceAt() result
+        surface,
         FIXED_DT,
         DEFAULT_VEHICLE_PARAMS,
         track.length,
       );
       vehicle = result.state;
       lastGripExceeded = result.gripExceeded;
+      lastSurfaceKind = surface.kind;
+      lastWallContact = result.wallContact;
       accumulator -= FIXED_DT;
       simTime += FIXED_DT;
     }
@@ -320,6 +342,9 @@ async function main() {
       throttle: throttle.read(),
       brake: brake.read(),
       gripExceeded: lastGripExceeded,
+      onCurb: lastSurfaceKind === "curb",
+      onGrass: lastSurfaceKind === "grass",
+      wallContact: lastWallContact,
     });
     hud.update(
       {
@@ -334,6 +359,7 @@ async function main() {
         lastLapTimeS,
         driveModeLabel: driveModeLabel(driveMode),
         assistStrengthPercent: driveMode === "assist" ? assistStrength * 100 : null,
+        surfaceLabel: lastWallContact ? "wall" : lastSurfaceKind,
         cameraLabel: cameraManager.current.label,
       },
       DEBUG

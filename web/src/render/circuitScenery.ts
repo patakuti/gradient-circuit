@@ -9,14 +9,23 @@ import * as THREE from "three";
 import { add, scale, vec3 } from "../sim/vec";
 import type { Vec3 } from "../sim/vec";
 import type { Track, TrackSample } from "../sim/track";
+import { bandWidth } from "../sim/surface";
 import { buildStrip, createRng } from "./scenery";
 import { createCurbTexture } from "./textures";
 
-const CURB_WIDTH_M = 0.6;
+// Widths come from sim/surface.ts's SURFACE_LAYOUT (P13 follow-up) instead
+// of being hardcoded here a second time, so the visible curb/grass and the
+// physical grip/wall bands sim/vehicle.ts uses can never drift apart.
+const CURB_WIDTH_M = bandWidth("circuit", "curb");
 const CURB_HEIGHT_M = 0.05;
 const CURB_TILE_M = 4; // stripe block length
 
-const GRASS_WIDTH_M = 6;
+const GRASS_WIDTH_M = bandWidth("circuit", "grass");
+
+// Gap between the wall (render/barrier.ts, now drawn for every course kind
+// as of P13.2) and the nearest tree, so trees don't crowd the barrier
+// ribbon now that one actually renders past the grass here.
+const TREE_BARRIER_CLEARANCE_M = 1.5;
 
 const TREE_SPACING_M = 40;
 const TREE_SKIP_PROBABILITY = 0.45;
@@ -85,7 +94,7 @@ function buildTrees(track: Track): THREE.Group {
       const trunkHeight = TREE_TRUNK_MIN_HEIGHT_M + rng() * (TREE_TRUNK_MAX_HEIGHT_M - TREE_TRUNK_MIN_HEIGHT_M);
       const foliageRadius =
         TREE_FOLIAGE_MIN_RADIUS_M + rng() * (TREE_FOLIAGE_MAX_RADIUS_M - TREE_FOLIAGE_MIN_RADIUS_M);
-      const base = edgeAt(sample, side, CURB_WIDTH_M + GRASS_WIDTH_M + foliageRadius);
+      const base = edgeAt(sample, side, CURB_WIDTH_M + GRASS_WIDTH_M + TREE_BARRIER_CLEARANCE_M + foliageRadius);
 
       const tree = new THREE.Group();
       const trunk = new THREE.Mesh(
