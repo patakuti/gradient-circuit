@@ -10,13 +10,17 @@
  * switching structurally glitch-free: there is only ever one steer state
  * (VehicleState.steer), and the mode only changes where its target comes
  * from.
+ *
+ * "assist" mode (P12 follow-up, design 6.14.1a) reuses this same output --
+ * main.ts blends it into the driver's own steer/brake input instead of
+ * replacing it. No separate control law lives here for that mode.
  */
 
 import type { Track } from "./track";
 import type { SurfaceState, VehicleParams, VehicleState } from "./vehicle";
 import { maxSteerAngleAt } from "./vehicle";
 
-export type DriveMode = "auto" | "manual";
+export type DriveMode = "auto" | "assist" | "manual";
 
 export interface AssistOutput {
   steer: number; // [-1, 1], same command space as VehicleInput.steer
@@ -35,6 +39,28 @@ const K_D = 0.01; // 1/m^2
 const K_PSI = 0.2; // 1/m
 const PREVIEW_TIME_S = 0.5; // s, feedforward lookahead -- outruns steerRate's own lag
 const PREVIEW_MIN_M = 5; // m, floor so lookahead doesn't collapse to 0 at low/zero speed
+
+// Caps the `d` fed into K_D before it reaches kappaTarget (design 6.14.1a,
+// P12 follow-up for "assist" mode's large-offset recovery). The
+// critical-damping derivation above assumes the achieved curvature tracks
+// kappaTarget; in reality both maxSteerAngleAt() and stepVehicle's grip
+// limiting cap what curvature is actually achievable, and for large |d|,
+// K_D*d alone already exceeds that cap -- so the whole kappaTarget sum
+// saturates regardless of K_PSI*psi, masking the heading-feedback damping
+// term until |d| shrinks back down. By then psi has built up far past
+// what the linearization assumes, so the car swings past centerline and
+// re-saturates the other way. Measured directly (not guessed) by running
+// this module's own computeAssist + sim/vehicle.ts's stepVehicle
+// headlessly from a 15 m offset: uncapped, this doesn't just overshoot
+// once, it grows (15 -> -33 -> +44 m on Monaco's real track at 40 m/s) and
+// never recovers at 60-80 m/s. Sweeping DAMPING_D_CAP against speeds
+// 20-90 m/s and offsets 2-15 m, 2.0 m was the largest value with zero
+// sign flips (monotonic recovery, no oscillation) at every point tested;
+// 3.0 m already re-diverges at 80 m/s (maxSteerAngleAt shrinks to ~2.9 deg
+// there, leaving very little authority once K_D*d is that large). This
+// only ever engages during recovery -- within normal driving |d| stays
+// well under 2 m, so it's a no-op for existing "auto" behavior.
+const DAMPING_D_CAP = 2.0; // m
 
 // Braking lookahead (design 6.14.3).
 const CORNER_MARGIN = 0.85; // fraction of lateral grip the assist targets, leaving a margin for error
@@ -113,7 +139,8 @@ export function computeAssist(
   // --- Steering: preview feedforward + lateral/heading-error feedback (design 6.14.2) ---
   const previewDistance = Math.max(PREVIEW_MIN_M, state.speed * PREVIEW_TIME_S);
   const previewCurvature = track.sampleAt(state.s + previewDistance).curvature;
-  const kappaTarget = previewCurvature - K_D * state.lateralOffset - K_PSI * state.yaw;
+  const dampingD = clamp(state.lateralOffset, -DAMPING_D_CAP, DAMPING_D_CAP);
+  const kappaTarget = previewCurvature - K_D * dampingD - K_PSI * state.yaw;
   const delta = Math.atan(kappaTarget * params.wheelBase);
   const steerRange = maxSteerAngleAt(state.speed, params);
   const steer = steerRange > 1e-9 ? clamp(delta / steerRange, -1, 1) : 0;

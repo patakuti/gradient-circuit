@@ -17,7 +17,8 @@ export interface HudData {
   lap: number;
   lapDistanceM: number;
   lastLapTimeS: number | null;
-  driveModeLabel: string; // "auto" | "manual" (design 6.14.5, P12)
+  driveModeLabel: string; // "auto" | "assist" | "manual" (design 6.14.5, P12)
+  assistStrengthPercent: number | null; // non-null only in "assist" mode (design 6.14.1a, P12 follow-up)
   cameraLabel: string;
 }
 
@@ -78,7 +79,9 @@ export class Hud {
       `grade: ${data.gradePercent.toFixed(1)}%\n` +
       `lap: ${data.lap}  dist: ${data.lapDistanceM.toFixed(0)} m\n` +
       `last lap: ${formatLapTime(data.lastLapTimeS)}\n` +
-      `mode: ${data.driveModeLabel}  [M] switch\n` +
+      `mode: ${data.driveModeLabel}${
+        data.assistStrengthPercent !== null ? ` (${data.assistStrengthPercent.toFixed(0)}%)` : ""
+      }  [M] switch\n` +
       `camera: ${data.cameraLabel}  [C] switch`;
 
     if (this.debugLines && debug) {
