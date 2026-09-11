@@ -42,7 +42,6 @@ import { COURSE_CATALOG, DEFAULT_COURSE_ID } from "./course/catalog";
 
 const FIXED_DT = 1 / 120; // design 6.4: physics runs at a fixed timestep
 const MAX_FRAME_DT = 0.1; // clamp huge dt after e.g. a backgrounded tab
-const LOOKAHEAD_M = 25; // design 6.6: cockpitRig's corner look-ahead distance
 
 // Manual-mode-only steer shaping (design 6.3.7 follow-up): a driver
 // reported full-lock feeling too sharp/twitchy on keyboard. sim/vehicle.ts's
@@ -124,13 +123,11 @@ function poseFor(track: Track, state: VehicleState): VehiclePose {
   // convention without needing a separate sign flip here.
   const forward = normalize(rotateAroundAxis(sample.tangent, sample.up, state.yaw));
   const right = normalize(cross(sample.tangent, sample.up));
-  const lookahead = track.positionAt(state.s + LOOKAHEAD_M, state.lateralOffset);
   return {
     position,
     forward,
     up: sample.up,
     right,
-    lookahead,
     speed: state.speed,
     s: state.s,
     lap: state.lap,

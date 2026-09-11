@@ -1,8 +1,14 @@
 /**
- * Driver-eye camera: rigidly mounted to the car, looking down the track's
- * lookahead point for a corner read.
+ * Driver-eye camera: rigidly mounted to the car, looking down the car's
+ * own nose.
  *
- * Design ref: 02_design.md section 6.6.
+ * Design ref: 02_design.md section 6.6. Previously looked toward a fixed
+ * point on the track ahead (`pose.lookahead`, for a corner-reading cue),
+ * but that has the same motion-sickness problem chaseRig.ts's boom had
+ * and was fixed for the same way (real play, P12 follow-up): the car
+ * visually rotates under steering while the camera's own gaze stays
+ * pinned to the road, mismatching where "forward" is expected to be.
+ * Looks down `pose.forward` instead, like chaseRig.ts's boom.
  */
 
 import * as THREE from "three";
@@ -30,8 +36,9 @@ export class CockpitRig implements CameraRig {
       up,
       EYE_HEIGHT_M,
     );
+    const forward = new THREE.Vector3(pose.forward.x, pose.forward.y, pose.forward.z);
     camera.position.copy(eye);
     camera.up.copy(ENABLE_BANK_ROLL ? up : WORLD_UP);
-    camera.lookAt(pose.lookahead.x, pose.lookahead.y, pose.lookahead.z);
+    camera.lookAt(eye.x + forward.x, eye.y + forward.y, eye.z + forward.z);
   }
 }
