@@ -40,4 +40,14 @@ export const DEFAULT_VEHICLE_PARAMS: VehicleParams = {
   steerReturnRate: 4.0, // 1/s -- self-centering is faster than steering in, per requirement 4.2.2
   steerGripFactor: 1.5, // must exceed 1 so full lock alone can exceed the grip limit (design 6.3.4 invariant)
   maxYaw: 1.05, // rad (60deg) -- caps |yaw|, structurally rules out spin/reverse (requirement 2.2); must stay < pi/2 (sim/vehicle.ts relies on cos(yaw) > 0)
+
+  // Wall contact (design 6.3.5, P13.2 follow-up): sim/ treats the vehicle
+  // as a point for surface/collision purposes (design 6.13.1), but a wall
+  // stopping the *center* point lets the visible body clip through it by
+  // half its width. This offsets the stop by the body's actual widest
+  // point instead. Kept in sync by hand with render/vehicleMesh.ts's
+  // REAR_WIDTH/2 + WHEEL_THICKNESS/2 (0.8 + 0.14 = 0.94, rounded up) --
+  // sim/ must not import render/ (design 6.1), so this can't be a shared
+  // constant (same tradeoff as audio/engine.ts's CURB_BUMP_PERIOD_M).
+  vehicleHalfWidth: 0.95, // m
 };

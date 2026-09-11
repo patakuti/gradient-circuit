@@ -19,6 +19,7 @@ export interface HudData {
   lastLapTimeS: number | null;
   driveModeLabel: string; // "auto" | "assist" | "manual" (design 6.14.5, P12)
   assistStrengthPercent: number | null; // non-null only in "assist" mode (design 6.14.1a, P12 follow-up)
+  surfaceLabel: string; // "asphalt" | "curb" | "grass" | "wall" (design 6.13/6.9, P13)
   cameraLabel: string;
 }
 
@@ -82,6 +83,7 @@ export class Hud {
       `mode: ${data.driveModeLabel}${
         data.assistStrengthPercent !== null ? ` (${data.assistStrengthPercent.toFixed(0)}%)` : ""
       }  [M] switch\n` +
+      `surface: ${data.surfaceLabel}  [R] reset\n` +
       `camera: ${data.cameraLabel}  [C] switch`;
 
     if (this.debugLines && debug) {
