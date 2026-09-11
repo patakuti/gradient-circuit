@@ -15,7 +15,9 @@ from .circuits import CIRCUITS
 from .session import select_session
 from .laps import extract_clean_laps, fastest_lap
 from .scale import measure_scale
-from .centerline import generate_centerline, DEFAULT_SG_WINDOW, DEFAULT_SG_POLYORDER
+from .centerline import (
+    generate_centerline, DEFAULT_SG_WINDOW, DEFAULT_SG_POLYORDER, DEFAULT_SG_WINDOW_Z, DEFAULT_SG_WINDOW_NARROW,
+)
 from .width import raw_half_widths, apply_calibration, WidthCalibration
 from .geometry import (
     compute_curvature,
@@ -25,6 +27,7 @@ from .geometry import (
 )
 from .export import build_course_document, write_course_json
 from .validate import run_all, print_report
+from .gripfit import CircuitGripData, fit_pooled_grip_model, load_course_ref
 
 # Determined from measured lap-to-lap lateral scatter (design 4.5): median
 # raw p2/p98 full-width scatter on the 2026 Monaco GP race is only 0.16 m,
@@ -61,13 +64,38 @@ def main(argv: list[str] | None = None) -> int:
     gen.add_argument("--out", type=Path, required=True, help="Output JSON path")
     gen.add_argument("--sg-window", type=int, default=DEFAULT_SG_WINDOW)
     gen.add_argument("--sg-polyorder", type=int, default=DEFAULT_SG_POLYORDER)
+    gen.add_argument("--sg-window-z", type=int, default=DEFAULT_SG_WINDOW_Z)
+    gen.add_argument(
+        "--sg-window-narrow", type=int, default=None,
+        help="Enable chicane-adaptive X/Y smoothing (narrower only at real chicanes; see "
+             f"generate_centerline's sg_window_narrow docstring). Disabled by default; "
+             f"{DEFAULT_SG_WINDOW_NARROW} is the measured value for Suzuka. Not safe for "
+             "Monaco (see the same docstring).",
+    )
     gen.add_argument("--width-k", type=float, default=DEFAULT_WIDTH_K)
     gen.add_argument("--width-margin", type=float, default=DEFAULT_WIDTH_MARGIN)
+
+    fit = sub.add_parser(
+        "fit-grip",
+        help="Fit the speed-dependent grip model (a0, k, a_cap) from real telemetry (design 4.9)",
+    )
+    fit.add_argument(
+        "--circuit", type=str, action="append", default=None, choices=sorted(CIRCUITS),
+        help="Circuit to include (repeatable; default: all circuits in circuits.py)",
+    )
+    fit.add_argument(
+        "--course-dir", type=Path, default=Path("../web/public/course"),
+        help="Directory holding <circuit>.json (default: ../web/public/course, relative to tools/)",
+    )
+    fit.add_argument("--year", type=int, default=None, help="Explicit year (default: auto-select, per circuit)")
+    fit.add_argument("--session", type=str, default="R", help="Session code (default: R)")
 
     args = parser.parse_args(argv)
 
     if args.command == "generate":
         return _run_generate(args)
+    if args.command == "fit-grip":
+        return _run_fit_grip(args)
     return 1
 
 
@@ -91,7 +119,9 @@ def _run_generate(args: argparse.Namespace) -> int:
     print(f"Reference lap: {fastest.driver} #{fastest.lap_number} ({fastest.lap_time_s:.3f}s)")
 
     print("Generating centerline...")
-    cl = generate_centerline(clean, fastest, scale, args.sg_window, args.sg_polyorder)
+    cl = generate_centerline(
+        clean, fastest, scale, args.sg_window, args.sg_polyorder, args.sg_window_z, args.sg_window_narrow,
+    )
     s = cl["s"]
     xyz = cl["xyz"]
     print(f"  -> {len(s)} samples, length={cl['length']:.2f}m, closure_gap={cl['closure_gap']:.4f}m")
@@ -166,6 +196,65 @@ def _run_generate(args: argparse.Namespace) -> int:
     if not all_passed:
         print("ONE OR MORE ACCEPTANCE CRITERIA FAILED", file=sys.stderr)
         return 1
+    return 0
+
+
+def _run_fit_grip(args: argparse.Namespace) -> int:
+    circuit_ids = args.circuit or sorted(CIRCUITS)
+    circuits: dict[str, CircuitGripData] = {}
+
+    for circuit_id in circuit_ids:
+        circuit = CIRCUITS[circuit_id]
+        course_path = args.course_dir / f"{circuit_id}.json"
+        if not course_path.exists():
+            print(
+                f"ERROR: {course_path} not found. Run `generate --circuit {circuit_id}` first "
+                "(fit-grip projects telemetry onto the exported course, not a freshly built one; design 4.9).",
+                file=sys.stderr,
+            )
+            return 1
+        course = load_course_ref(course_path)
+
+        print(f"[{circuit_id}] Selecting {circuit.event_name} session (year={args.year or 'auto'})...")
+        sel = select_session(circuit.event_name, year=args.year, session_code=args.session)
+        print(f"  -> {sel.year} {sel.event_name} [{sel.session_code}]")
+
+        clean = extract_clean_laps(sel.session)
+        scale, _ = measure_scale(clean)
+        print(f"  -> {len(clean)} clean laps, scale={scale}")
+
+        circuits[circuit_id] = CircuitGripData(course=course, clean_laps=clean, scale=scale)
+
+    print("\nFitting pooled grip model (all circuits combined, design 4.9)...")
+    report = fit_pooled_grip_model(circuits)
+    fit = report.fit
+
+    print(f"  n_samples={report.n_samples_total}")
+    print("  speed-bin envelope (p95):")
+    for i, (v, a, n) in enumerate(zip(report.v_mid, report.a_env, report.counts)):
+        marker = " <- peak/fit cutoff" if i == fit.peak_bin_index else ""
+        print(f"    {v*3.6:6.0f} km/h  n={n:5d}  a_lat(p95)={a:6.1f} m/s^2 ({a/9.81:.2f} g){marker}")
+
+    print(f"\n  a0 (mechanical grip, v=0) = {fit.a0:.2f} m/s^2 ({fit.a0/9.81:.2f} g)")
+    print(f"  k  (aero coefficient)     = {fit.k:.5f} 1/m")
+    print(f"  a_cap (saturation)        = {fit.a_cap:.2f} m/s^2 ({fit.a_cap/9.81:.2f} g)")
+
+    print("\n  Tightest-corner check (real speed vs. model speed, top 5% curvature):")
+    for circuit_id, tight in report.per_circuit_tight_corner.items():
+        if tight is None:
+            print(f"    {circuit_id}: no tight-curvature points projected")
+            continue
+        print(
+            f"    {circuit_id}: n={tight.n_points}  real={tight.real_speed_p50_kmh:.0f} km/h  "
+            f"model={tight.model_speed_p50_kmh:.0f} km/h  ratio(real/model)={tight.ratio_p50:.2f}"
+        )
+
+    print(
+        "\nCopy these into web/src/sim/vehicleParams.ts:\n"
+        f"  mechLateralAccel: {fit.a0:.2f},\n"
+        f"  aeroLateralCoeff: {fit.k:.5f},\n"
+        f"  maxLateralAccelCap: {fit.a_cap:.2f},"
+    )
     return 0
 
 

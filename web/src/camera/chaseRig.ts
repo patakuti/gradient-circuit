@@ -7,6 +7,15 @@
  * to speed (a first-order lag's steady-state offset is roughly v/k for a
  * target moving at speed v) -- reported as an unwanted effect (P10), so the
  * position is now set directly each frame instead.
+ *
+ * P12 boom direction: briefly changed to boom off the track's own tangent
+ * (not the car's yawed heading) to avoid the camera swinging on every
+ * steering correction -- reverted after real play surfaced this as motion
+ * sickness. The car visually rotating while the camera's own heading stays
+ * fixed on the track mismatches vestibular expectation ("forward" is where
+ * the car's nose points, not where the road points); real chase/onboard
+ * cameras are rigged to the chassis for the same reason. The boom uses the
+ * car's own forward again.
  */
 
 import * as THREE from "three";

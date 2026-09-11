@@ -25,22 +25,13 @@ from __future__ import annotations
 import numpy as np
 from scipy import stats as scipy_stats
 
-from .centerline import DS
+# compute_curvature lives in centerline.py (not here) so that module's own
+# chicane-adaptive smoothing (P12 follow-up) can use it without a circular
+# import (geometry.py already depends on centerline.py for DS). Re-exported
+# below so `from .geometry import compute_curvature` keeps working.
+from .centerline import DS, compute_curvature
 
-
-def compute_curvature(xyz: np.ndarray) -> np.ndarray:
-    """kappa = (x'y'' - y'x'') / (x'^2+y'^2)^1.5, central differences, periodic.
-
-    Positive = left-turning, per the module docstring's sign convention.
-    """
-    x, y = xyz[:, 0], xyz[:, 1]
-    dx = (np.roll(x, -1) - np.roll(x, 1)) / (2 * DS)
-    dy = (np.roll(y, -1) - np.roll(y, 1)) / (2 * DS)
-    ddx = (np.roll(x, -1) - 2 * x + np.roll(x, 1)) / (DS**2)
-    ddy = (np.roll(y, -1) - 2 * y + np.roll(y, 1)) / (DS**2)
-    denom = (dx**2 + dy**2) ** 1.5
-    denom = np.where(denom < 1e-9, 1e-9, denom)
-    return (dx * ddy - dy * ddx) / denom
+__all__ = ["compute_curvature", "compute_grade", "evaluate_bank_significance", "compute_bank_zero"]
 
 
 def compute_grade(xyz: np.ndarray) -> np.ndarray:

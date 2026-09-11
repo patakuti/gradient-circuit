@@ -52,7 +52,10 @@ class CleanLap:
     driver: str
     lap_number: float
     lap_time_s: float
-    telemetry: pd.DataFrame  # columns: X, Y, Z, Distance (raw FastF1 units; Distance in meters)
+    # columns: X, Y, Z, Distance (raw FastF1 units; Distance in meters),
+    # Speed (km/h, car-channel measurement -- unlike X/Y/Z it is not GPS
+    # derived, so gripfit.py trusts it directly; design 4.9).
+    telemetry: pd.DataFrame
 
 
 def _clean_telemetry(lap: fastf1.core.Lap) -> pd.DataFrame | None:
@@ -60,7 +63,7 @@ def _clean_telemetry(lap: fastf1.core.Lap) -> pd.DataFrame | None:
         tel = lap.get_telemetry()
     except Exception:
         return None
-    needed = {"X", "Y", "Z", "Distance"}
+    needed = {"X", "Y", "Z", "Distance", "Speed"}
     if tel is None or tel.empty or not needed.issubset(tel.columns):
         return None
     if len(tel) < MIN_TELEMETRY_POINTS:
@@ -69,7 +72,7 @@ def _clean_telemetry(lap: fastf1.core.Lap) -> pd.DataFrame | None:
     y_span = tel["Y"].max() - tel["Y"].min()
     if max(x_span, y_span) < MIN_POSITION_SPAN:
         return None
-    return tel[["X", "Y", "Z", "Distance"]].reset_index(drop=True)
+    return tel[["X", "Y", "Z", "Distance", "Speed"]].reset_index(drop=True)
 
 
 def extract_clean_laps(session: fastf1.core.Session) -> list[CleanLap]:
