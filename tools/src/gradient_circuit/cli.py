@@ -15,7 +15,9 @@ from .circuits import CIRCUITS
 from .session import select_session
 from .laps import extract_clean_laps, fastest_lap
 from .scale import measure_scale
-from .centerline import generate_centerline, DEFAULT_SG_WINDOW, DEFAULT_SG_POLYORDER, DEFAULT_SG_WINDOW_Z
+from .centerline import (
+    generate_centerline, DEFAULT_SG_WINDOW, DEFAULT_SG_POLYORDER, DEFAULT_SG_WINDOW_Z, DEFAULT_SG_WINDOW_NARROW,
+)
 from .width import raw_half_widths, apply_calibration, WidthCalibration
 from .geometry import (
     compute_curvature,
@@ -63,6 +65,13 @@ def main(argv: list[str] | None = None) -> int:
     gen.add_argument("--sg-window", type=int, default=DEFAULT_SG_WINDOW)
     gen.add_argument("--sg-polyorder", type=int, default=DEFAULT_SG_POLYORDER)
     gen.add_argument("--sg-window-z", type=int, default=DEFAULT_SG_WINDOW_Z)
+    gen.add_argument(
+        "--sg-window-narrow", type=int, default=None,
+        help="Enable chicane-adaptive X/Y smoothing (narrower only at real chicanes; see "
+             f"generate_centerline's sg_window_narrow docstring). Disabled by default; "
+             f"{DEFAULT_SG_WINDOW_NARROW} is the measured value for Suzuka. Not safe for "
+             "Monaco (see the same docstring).",
+    )
     gen.add_argument("--width-k", type=float, default=DEFAULT_WIDTH_K)
     gen.add_argument("--width-margin", type=float, default=DEFAULT_WIDTH_MARGIN)
 
@@ -110,7 +119,9 @@ def _run_generate(args: argparse.Namespace) -> int:
     print(f"Reference lap: {fastest.driver} #{fastest.lap_number} ({fastest.lap_time_s:.3f}s)")
 
     print("Generating centerline...")
-    cl = generate_centerline(clean, fastest, scale, args.sg_window, args.sg_polyorder, args.sg_window_z)
+    cl = generate_centerline(
+        clean, fastest, scale, args.sg_window, args.sg_polyorder, args.sg_window_z, args.sg_window_narrow,
+    )
     s = cl["s"]
     xyz = cl["xyz"]
     print(f"  -> {len(s)} samples, length={cl['length']:.2f}m, closure_gap={cl['closure_gap']:.4f}m")

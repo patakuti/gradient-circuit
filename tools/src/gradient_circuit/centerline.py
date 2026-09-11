@@ -91,6 +91,25 @@ DEFAULT_SG_POLYORDER = 3
 # were not needed to bring it back in line with the rest of the course).
 DEFAULT_SG_WINDOW_Z = 61
 
+# Narrow-window target for chicane-adaptive X/Y smoothing (see
+# smooth_periodic_chicane_adaptive / generate_centerline's sg_window_narrow).
+# P12 further follow-up: after the earlier 51->31 change, Suzuka's hairpin
+# already matched a hand-measured map reference (~20m radius) at window=31,
+# but its two chicane bends were still measurably too wide (25.3m/35.7m vs
+# a <20m / 20-30m target read off the same map). A flat narrower window
+# can't fix one without wrecking the other -- narrowing enough to help the
+# chicanes also over-tightens the hairpin, since raw curvature magnitude
+# alone can't tell a chicane (sign-cancelling S) from a hairpin (single-
+# direction turn) of similar tightness. Measured a _chicane_score sign-
+# cancellation window sweep and a narrow_window sweep on real Suzuka data:
+# 9 gives the best result found (chicane1 25.3m->21.1m, chicane2
+# 35.7m->30.4m, hairpin unchanged at 20.4m) while keeping a comfortable
+# margin on acceptance criterion #5 (max adjacent jump 0.037, vs the 0.05
+# limit -- narrow_window in [10,15] tested worse on both counts, an
+# SG-filter parity/stability quirk rather than a monotonic trend). Not
+# used for Monaco -- see generate_centerline's sg_window_narrow docstring.
+DEFAULT_SG_WINDOW_NARROW = 9
+
 CLOSURE_TOLERANCE = DS  # design 4.4 step 7: gap must be < 1.0 m
 
 # Reject projected lateral offsets beyond this magnitude before they reach
@@ -554,6 +573,24 @@ def smooth_self_crossing_regions(
     return out
 
 
+def compute_curvature(xyz: np.ndarray) -> np.ndarray:
+    """kappa = (x'y'' - y'x'') / (x'^2+y'^2)^1.5, central differences, periodic.
+
+    Positive = left-turning (geometry.py's sign convention, verified there).
+    Lives here rather than in geometry.py so `smooth_periodic_chicane_adaptive`
+    below can use it without a circular import (geometry.py depends on this
+    module for DS); geometry.py re-exports it for the rest of the codebase.
+    """
+    x, y = xyz[:, 0], xyz[:, 1]
+    dx = (np.roll(x, -1) - np.roll(x, 1)) / (2 * DS)
+    dy = (np.roll(y, -1) - np.roll(y, 1)) / (2 * DS)
+    ddx = (np.roll(x, -1) - 2 * x + np.roll(x, 1)) / (DS**2)
+    ddy = (np.roll(y, -1) - 2 * y + np.roll(y, 1)) / (DS**2)
+    denom = (dx**2 + dy**2) ** 1.5
+    denom = np.where(denom < 1e-9, 1e-9, denom)
+    return (dx * ddy - dy * ddx) / denom
+
+
 def smooth_periodic(
     xyz: np.ndarray, window: int, polyorder: int, z_window: int | None = None,
 ) -> np.ndarray:
@@ -566,6 +603,74 @@ def smooth_periodic(
     for axis in range(2):
         out[:, axis] = savgol_filter(xyz[:, axis], window, polyorder, mode="wrap")
     out[:, 2] = savgol_filter(xyz[:, 2], z_window if z_window is not None else window, polyorder, mode="wrap")
+    return out
+
+
+def _chicane_score(curvature: np.ndarray, window_m: float, ds: float = DS) -> np.ndarray:
+    """0..1 measure of how much a periodic window centered at each sample is
+    a sign-cancelling S-shape (a chicane) rather than a single-direction
+    turn (a hairpin), regardless of how tight either one is: `1 -
+    |sum(curvature)| / sum(|curvature|)` over the window. A hairpin's
+    curvature keeps one sign throughout the window, so the two sums are
+    close and the score is ~0; a chicane's two opposite-sign lobes cancel in
+    the signed sum but not the absolute one, pushing the score toward 1.
+    Measured on real Suzuka/Monaco data (window_m=100-150): cleanly
+    separates the Suzuka hairpin (~0.0-0.05) from its two chicane bends
+    (~0.7-0.98), which raw curvature magnitude alone cannot do (comparable
+    magnitude at both) -- see `smooth_periodic_chicane_adaptive`.
+    """
+    n = int(round(window_m / ds))
+    if n % 2 == 0:
+        n += 1
+    half = n // 2
+    count = len(curvature)
+    padded = np.concatenate([curvature[-half:], curvature, curvature[:half]])
+    signed_cum = np.cumsum(np.concatenate([[0.0], padded]))
+    abs_cum = np.cumsum(np.concatenate([[0.0], np.abs(padded)]))
+    signed = signed_cum[n:n + count] - signed_cum[:count]
+    total = abs_cum[n:n + count] - abs_cum[:count]
+    return 1.0 - np.abs(signed) / (total + 1e-9)
+
+
+def smooth_periodic_chicane_adaptive(
+    xyz: np.ndarray,
+    wide_window: int,
+    narrow_window: int,
+    polyorder: int,
+    score_window_m: float = 120.0,
+    score_lo: float = 0.3,
+    score_hi: float = 0.7,
+    min_curvature: float = 0.01,
+) -> np.ndarray:
+    """X/Y-only variant of `smooth_periodic`: blends the `wide_window`- and
+    `narrow_window`-smoothed racing line toward the narrow result only where
+    `_chicane_score` (computed from the *wide* pass's own curvature) says
+    the wide window is cutting across a real chicane, not a hairpin or
+    straight-line noise. `min_curvature` [1/m] gates the blend off entirely
+    below that curvature magnitude, since the score is dominated by noise
+    where both the signed and absolute sums are near zero (a straight).
+
+    Z is left at the wide pass's own value; callers that also want a wider
+    Z-only window (`DEFAULT_SG_WINDOW_Z`) should overwrite column 2
+    afterward, as `generate_centerline` does.
+
+    Only safe to use where the input's own narrow-window smoothing is
+    numerically well-behaved (design 4.4 addendum: Monaco's reference line
+    has a sample near its own closing seam that makes any window below
+    ~21 blow up there; Suzuka's much larger, cleaner lap count does not
+    have this problem down to window~11). Not applied to Monaco for that
+    reason -- see `generate_centerline`'s `sg_window_narrow` docstring.
+    """
+    wide = smooth_periodic(xyz, wide_window, polyorder)
+    narrow = smooth_periodic(xyz, narrow_window, polyorder)
+    k_wide = compute_curvature(wide)
+    score = _chicane_score(k_wide, score_window_m)
+    weight = np.clip((score - score_lo) / (score_hi - score_lo), 0.0, 1.0)
+    weight = weight * weight * (3.0 - 2.0 * weight)  # smoothstep
+    weight = np.where(np.abs(k_wide) >= min_curvature, weight, 0.0)
+    out = wide.copy()
+    out[:, 0] = wide[:, 0] + weight * (narrow[:, 0] - wide[:, 0])
+    out[:, 1] = wide[:, 1] + weight * (narrow[:, 1] - wide[:, 1])
     return out
 
 
@@ -604,8 +709,23 @@ def generate_centerline(
     sg_window: int = DEFAULT_SG_WINDOW,
     sg_polyorder: int = DEFAULT_SG_POLYORDER,
     sg_window_z: int = DEFAULT_SG_WINDOW_Z,
+    sg_window_narrow: int | None = None,
 ) -> dict:
-    """Run the full centerline pipeline. Returns a dict of arrays/diagnostics."""
+    """Run the full centerline pipeline. Returns a dict of arrays/diagnostics.
+
+    `sg_window_narrow`, when given, switches X/Y smoothing from a flat
+    `sg_window` to `smooth_periodic_chicane_adaptive(sg_window,
+    sg_window_narrow, ...)` -- narrower only where the wide pass shows a
+    real chicane (P12 follow-up: window=31 alone was overshooting Suzuka's
+    hairpin/chicane bends by a similar amount despite the hairpin being
+    correct and only the chicanes needing to tighten; a flat narrower
+    window couldn't fix one without also over-tightening the other).
+    Left disabled (None) by default and not used for Monaco: Monaco's
+    reference line has a sample near its own closing seam where any window
+    below ~21 is numerically unstable (measured, design 4.4 addendum),
+    which this narrow pass would hit directly. Suzuka's much larger, more
+    consistent lap count does not have that problem in the range used here.
+    """
     ref_s, ref_xyz = build_reference_line(fastest, scale)
     _, ref_normal = compute_tangent_normal(ref_xyz, closed=True)
 
@@ -616,7 +736,11 @@ def generate_centerline(
     # anything implausible elsewhere.
     candidate = smooth_self_crossing_regions(ref_xyz, candidate)
     candidate = clip_implausible_grade(candidate)
-    smoothed = smooth_periodic(candidate, sg_window, sg_polyorder, z_window=sg_window_z)
+    if sg_window_narrow is not None:
+        smoothed = smooth_periodic_chicane_adaptive(candidate, sg_window, sg_window_narrow, sg_polyorder)
+        smoothed[:, 2] = smooth_periodic(candidate, sg_window, sg_polyorder, z_window=sg_window_z)[:, 2]
+    else:
+        smoothed = smooth_periodic(candidate, sg_window, sg_polyorder, z_window=sg_window_z)
     # Savitzky-Golay can reintroduce a little overshoot right at the edge
     # of a sharp correction (ordinary filter ringing); a second pass here
     # catches that residue without needing a wider first-pass correction.
