@@ -18,6 +18,11 @@ export interface DriveModeOption {
   label: string;
 }
 
+export interface AssistStrengthOption {
+  id: string;
+  label: string;
+}
+
 export interface CourseOption {
   id: string;
   label: string;
@@ -38,6 +43,9 @@ export function createControls(
   activeCourseId: string,
   onCourseSelect: (id: string) => void,
   onMuteToggle: (muted: boolean) => void,
+  assistStrengthOptions: AssistStrengthOption[],
+  activeAssistStrengthId: string,
+  onAssistStrengthSelect: (id: string) => void,
 ): Controls {
   const root = document.createElement("div");
   root.style.cssText =
@@ -70,9 +78,33 @@ export function createControls(
     el.textContent = option.label;
     modeSelect.appendChild(el);
   }
-  modeSelect.addEventListener("change", () => onDriveModeSelect(modeSelect.value));
+  modeSelect.addEventListener("change", () => {
+    strengthSelect.disabled = modeSelect.value !== "assist";
+    onDriveModeSelect(modeSelect.value);
+  });
   modeRow.appendChild(modeSelect);
   root.appendChild(modeRow);
+
+  // Assist strength (design 6.14.1a, P12 follow-up): a setting, not a
+  // driving input, so a dropdown is fine despite design 6.5's keyboard-only
+  // rule for throttle/brake/steer. Only meaningful in "assist" mode -- kept
+  // visible but disabled otherwise, mirroring how browsers grey out
+  // inapplicable settings rather than hiding them.
+  const strengthRow = document.createElement("label");
+  strengthRow.style.cssText = "display:flex;align-items:center;gap:8px;";
+  strengthRow.textContent = "assist";
+  const strengthSelect = document.createElement("select");
+  for (const option of assistStrengthOptions) {
+    const el = document.createElement("option");
+    el.value = option.id;
+    el.textContent = option.label;
+    if (option.id === activeAssistStrengthId) el.selected = true;
+    strengthSelect.appendChild(el);
+  }
+  strengthSelect.disabled = true; // main.ts's default drive mode is "auto" (design 6.14.5), not "assist"
+  strengthSelect.addEventListener("change", () => onAssistStrengthSelect(strengthSelect.value));
+  strengthRow.appendChild(strengthSelect);
+  root.appendChild(strengthRow);
 
   const courseRow = document.createElement("label");
   courseRow.style.cssText = "display:flex;align-items:center;gap:8px;";
@@ -110,6 +142,7 @@ export function createControls(
     },
     setActiveMode(id: string) {
       if (modeSelect.value !== id) modeSelect.value = id;
+      strengthSelect.disabled = id !== "assist";
     },
   };
 }

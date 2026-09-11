@@ -37,25 +37,26 @@ import { CockpitRig } from "./camera/cockpitRig";
 import type { VehiclePose } from "./camera/types";
 import { EngineAudio } from "./audio/engine";
 import { Hud } from "./ui/hud";
-import { createControls, type DriveModeOption } from "./ui/controls";
+import { createControls, type DriveModeOption, type AssistStrengthOption } from "./ui/controls";
 import { COURSE_CATALOG, DEFAULT_COURSE_ID } from "./course/catalog";
 
 const FIXED_DT = 1 / 120; // design 6.4: physics runs at a fixed timestep
 const MAX_FRAME_DT = 0.1; // clamp huge dt after e.g. a backgrounded tab
 
-// Manual-mode-only steer shaping (design 6.3.7 follow-up): a driver
-// reported full-lock feeling too sharp/twitchy on keyboard. sim/vehicle.ts's
-// own steerRate can't be slowed to fix this -- it's shared with the auto
-// assist (design 6.14.4), and a sweep confirmed slowing it badly breaks the
-// assist's ability to track fast corners (Monaco's road-edge excursion
-// jumped from 0.76 m to 170+ m at steerRate=1.5). Instead, the raw -1/0/+1
-// key command is smoothed *before* it reaches stepVehicle, only in manual
-// mode -- vehicle.ts's own ramp (fast, auto-mode-tuned) then tracks this
-// already-gentle target closely, so the felt response is dominated by this
-// slower stage without touching the shared physical model. Full lock is
-// still reachable (unlike scaling the command's magnitude down), just
-// takes longer to ramp into -- preserves the ability to make the
-// tightest hairpin if committed to early.
+// Driver-steer-input shaping (design 6.3.7 follow-up, extended to "assist"
+// mode by design 6.14.1a): a driver reported full-lock feeling too
+// sharp/twitchy on keyboard. sim/vehicle.ts's own steerRate can't be slowed
+// to fix this -- it's shared with the auto assist (design 6.14.4), and a
+// sweep confirmed slowing it badly breaks the assist's ability to track
+// fast corners (Monaco's road-edge excursion jumped from 0.76 m to 170+ m
+// at steerRate=1.5). Instead, the raw -1/0/+1 key command is smoothed
+// *before* it reaches stepVehicle, in any mode where the driver's own
+// steering is used ("manual" and "assist") -- vehicle.ts's own ramp (fast,
+// auto-mode-tuned) then tracks this already-gentle target closely, so the
+// felt response is dominated by this slower stage without touching the
+// shared physical model. Full lock is still reachable (unlike scaling the
+// command's magnitude down), just takes longer to ramp into -- preserves
+// the ability to make the tightest hairpin if committed to early.
 const MANUAL_STEER_SHAPE_RATE = 1.2; // 1/s, engaging
 const MANUAL_STEER_SHAPE_RETURN_RATE = 1.8; // 1/s, releasing
 
@@ -67,11 +68,30 @@ function moveToward(current: number, target: number, maxDelta: number): number {
 
 const DRIVE_MODE_OPTIONS: DriveModeOption[] = [
   { id: "auto", label: "Auto" },
+  { id: "assist", label: "Assist" },
   { id: "manual", label: "Manual" },
 ];
 function driveModeLabel(mode: DriveMode): string {
-  return mode === "auto" ? "Auto" : "Manual";
+  if (mode === "auto") return "Auto";
+  if (mode === "assist") return "Assist";
+  return "Manual";
 }
+// Cycle order for the [M] key (design 6.14.5).
+const DRIVE_MODE_CYCLE: DriveMode[] = ["auto", "assist", "manual"];
+function nextDriveMode(mode: DriveMode): DriveMode {
+  return DRIVE_MODE_CYCLE[(DRIVE_MODE_CYCLE.indexOf(mode) + 1) % DRIVE_MODE_CYCLE.length];
+}
+
+// Assist strength (design 6.14.1a, P12 follow-up): a setting, not a driving
+// input (design 4.2.2), so it's UI-only -- no keyboard binding.
+const ASSIST_STRENGTH_OPTIONS: AssistStrengthOption[] = [
+  { id: "0", label: "0%" },
+  { id: "0.25", label: "25%" },
+  { id: "0.5", label: "50%" },
+  { id: "0.75", label: "75%" },
+  { id: "1", label: "100%" },
+];
+const DEFAULT_ASSIST_STRENGTH_ID = "0.5";
 
 const DEBUG = new URLSearchParams(window.location.search).get("debug") === "1";
 // design 6.10: `?course=<id>` picks which course/<id>.json to load, same
@@ -159,6 +179,16 @@ async function main() {
 
   let vehicle: VehicleState = { s: 0, speed: 0, lap: 0, lateralOffset: 0, yaw: 0, steer: 0 };
   let driveMode: DriveMode = "auto"; // design 6.14.5: default preserves the P11 throttle-only experience
+  let assistStrength = Number(DEFAULT_ASSIST_STRENGTH_ID); // design 6.14.1a, [0, 1]
+
+  // design 6.14.1a: entering "assist" or "manual" from "auto" seeds the
+  // driver-steer shaping state (below) at the car's current steer angle, so
+  // driver control picks up smoothly instead of snapping from whatever the
+  // auto assist last commanded.
+  function enterDriverSteeredMode(next: DriveMode) {
+    if (next !== "auto" && driveMode === "auto") shapedSteer = vehicle.steer;
+    driveMode = next;
+  }
 
   const cameraManager = new CameraManager([new ChaseRig(), new CockpitRig()]);
   cameraManager.init(camera, poseFor(track, vehicle));
@@ -170,14 +200,18 @@ async function main() {
     (id) => cameraManager.select(id),
     DRIVE_MODE_OPTIONS,
     (id) => {
-      const next: DriveMode = id === "manual" ? "manual" : "auto";
-      if (next === "manual" && driveMode !== "manual") manualSteerShaped = vehicle.steer;
-      driveMode = next;
+      const next = DRIVE_MODE_OPTIONS.find((option) => option.id === id)?.id as DriveMode | undefined;
+      if (next) enterDriverSteeredMode(next);
     },
     COURSE_CATALOG,
     COURSE_ID,
     selectCourse,
     (muted) => engineAudio.setMuted(muted),
+    ASSIST_STRENGTH_OPTIONS,
+    DEFAULT_ASSIST_STRENGTH_ID,
+    (id) => {
+      assistStrength = Number(id);
+    },
   );
   const hud = new Hud(document.body, DEBUG, course.meta.name);
 
@@ -198,7 +232,7 @@ async function main() {
   // frame, not an OR across every step that ran, to avoid flicker when
   // multiple steps land in one frame.
   let lastGripExceeded = false;
-  let manualSteerShaped = 0; // manual-mode-only pre-ramp state, see MANUAL_STEER_SHAPE_RATE above
+  let shapedSteer = 0; // driver-steer pre-ramp state ("manual"/"assist" only), see MANUAL_STEER_SHAPE_RATE above
 
   function animate() {
     requestAnimationFrame(animate);
@@ -209,9 +243,7 @@ async function main() {
     accumulator += frameDt;
 
     if (modeTrigger.consume()) {
-      const next: DriveMode = driveMode === "auto" ? "manual" : "auto";
-      if (next === "manual") manualSteerShaped = vehicle.steer;
-      driveMode = next;
+      enterDriverSteeredMode(nextDriveMode(driveMode));
       controls.setActiveMode(driveMode);
     }
 
@@ -221,21 +253,31 @@ async function main() {
       // design 6.14.1: the assist never bypasses the vehicle model -- its
       // output is mixed into the same VehicleInput a human's keys produce,
       // so it is subject to the same steer-rate ramp and grip limits.
-      const input: VehicleInput =
-        driveMode === "auto"
-          ? (() => {
-              const assist = computeAssist(track, vehicle, DEFAULT_VEHICLE_PARAMS, ASPHALT_SURFACE);
-              return {
-                throttle: assist.throttleCut ? 0 : throttle.read(),
-                brake: Math.max(brake.read(), assist.brake),
-                steer: assist.steer,
-              };
-            })()
-          : (() => {
-              const shapeRate = steerAxis.read() === 0 ? MANUAL_STEER_SHAPE_RETURN_RATE : MANUAL_STEER_SHAPE_RATE;
-              manualSteerShaped = moveToward(manualSteerShaped, steerAxis.read(), shapeRate * FIXED_DT);
-              return { throttle: throttle.read(), brake: brake.read(), steer: manualSteerShaped };
-            })();
+      const input: VehicleInput = (() => {
+        if (driveMode === "auto") {
+          const assist = computeAssist(track, vehicle, DEFAULT_VEHICLE_PARAMS, ASPHALT_SURFACE);
+          return {
+            throttle: assist.throttleCut ? 0 : throttle.read(),
+            brake: Math.max(brake.read(), assist.brake),
+            steer: assist.steer,
+          };
+        }
+        const shapeRate = steerAxis.read() === 0 ? MANUAL_STEER_SHAPE_RETURN_RATE : MANUAL_STEER_SHAPE_RATE;
+        shapedSteer = moveToward(shapedSteer, steerAxis.read(), shapeRate * FIXED_DT);
+        if (driveMode === "manual") {
+          return { throttle: throttle.read(), brake: brake.read(), steer: shapedSteer };
+        }
+        // design 6.14.1a: "assist" blends computeAssist's output into the
+        // driver's own (already-shaped) input instead of replacing it --
+        // throttle stays fully the driver's, brake only ever adds on top of
+        // the driver's own braking, steer is a straight lerp by strength.
+        const assist = computeAssist(track, vehicle, DEFAULT_VEHICLE_PARAMS, ASPHALT_SURFACE);
+        return {
+          throttle: throttle.read(),
+          brake: Math.max(brake.read(), assistStrength * assist.brake),
+          steer: shapedSteer + assistStrength * (assist.steer - shapedSteer),
+        };
+      })();
 
       const result = stepVehicle(
         vehicle,
@@ -291,6 +333,7 @@ async function main() {
         lapDistanceM: vehicle.s,
         lastLapTimeS,
         driveModeLabel: driveModeLabel(driveMode),
+        assistStrengthPercent: driveMode === "assist" ? assistStrength * 100 : null,
         cameraLabel: cameraManager.current.label,
       },
       DEBUG
