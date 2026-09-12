@@ -12,6 +12,7 @@
  */
 
 import type { VehicleParams } from "./vehicle";
+import type { ShiftParams } from "./shiftModel";
 
 export const DEFAULT_VEHICLE_PARAMS: VehicleParams = {
   mass: 795, // kg, car + driver + fuel, roughly current F1 minimum weight
@@ -50,4 +51,30 @@ export const DEFAULT_VEHICLE_PARAMS: VehicleParams = {
   // sim/ must not import render/ (design 6.1), so this can't be a shared
   // constant (same tradeoff as audio/engine.ts's CURB_BUMP_PERIOD_M).
   vehicleHalfWidth: 0.95, // m
+};
+
+// Measured, not tuned -- `tools fit-shift` (design 4.10), 1025 clean laps
+// (Monaco + Suzuka pooled, same "the car is one car" doctrine as the grip
+// fit above). No boundary needed the hysteresis floor (every gear's
+// measured up-shift speed already exceeded its down-shift speed by a
+// comfortable margin -- see design 4.10 for the full table). Per-gear
+// RPM~Speed fit R^2 ranges 0.29-0.58 (medium confidence: a meaningful
+// linear relationship, but real telemetry scatter -- wheel slip, sensor
+// timing -- means speed alone doesn't pin down RPM precisely within a gear).
+export const DEFAULT_SHIFT_PARAMS: ShiftParams = {
+  gearCount: 8,
+  idleRpm: 8846,
+  redlineRpm: 12057,
+  shiftUpSpeeds: [28.80, 38.89, 47.17, 56.04, 64.98, 73.54, 83.58],
+  shiftDownSpeeds: [26.29, 32.88, 42.11, 51.11, 59.86, 65.45, 72.97],
+  gearRpmCoeffs: [
+    { slope: 192.64, intercept: 4983 },
+    { slope: 170.84, intercept: 4526 },
+    { slope: 89.41, intercept: 6878 },
+    { slope: 97.07, intercept: 5878 },
+    { slope: 68.56, intercept: 6851 },
+    { slope: 50.45, intercept: 7560 },
+    { slope: 44.37, intercept: 7430 },
+    { slope: 68.29, intercept: 4952 },
+  ],
 };

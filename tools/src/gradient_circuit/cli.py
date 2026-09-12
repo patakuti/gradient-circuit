@@ -33,6 +33,7 @@ from .reference import (
     ADOPTED_GRIP_FIT, FALLBACK_VIOLATION_THRESHOLD,
     extract_reference_speed, reachability_violation_fraction,
 )
+from .shiftfit import fit_shift_model
 
 # How many of the session's fastest clean laps to try, in pace order, as
 # the reference-speed source before giving up and using the fastest one
@@ -101,12 +102,25 @@ def main(argv: list[str] | None = None) -> int:
     fit.add_argument("--year", type=int, default=None, help="Explicit year (default: auto-select, per circuit)")
     fit.add_argument("--session", type=str, default="R", help="Session code (default: R)")
 
+    fit_shift = sub.add_parser(
+        "fit-shift",
+        help="Fit the gear/RPM-vs-speed shift model from real telemetry (design 4.10)",
+    )
+    fit_shift.add_argument(
+        "--circuit", type=str, action="append", default=None, choices=sorted(CIRCUITS),
+        help="Circuit to include (repeatable; default: all circuits in circuits.py)",
+    )
+    fit_shift.add_argument("--year", type=int, default=None, help="Explicit year (default: auto-select, per circuit)")
+    fit_shift.add_argument("--session", type=str, default="R", help="Session code (default: R)")
+
     args = parser.parse_args(argv)
 
     if args.command == "generate":
         return _run_generate(args)
     if args.command == "fit-grip":
         return _run_fit_grip(args)
+    if args.command == "fit-shift":
+        return _run_fit_shift(args)
     return 1
 
 
@@ -307,6 +321,60 @@ def _run_fit_grip(args: argparse.Namespace) -> int:
         f"  mechLateralAccel: {fit.a0:.2f},\n"
         f"  aeroLateralCoeff: {fit.k:.5f},\n"
         f"  maxLateralAccelCap: {fit.a_cap:.2f},"
+    )
+    return 0
+
+
+def _run_fit_shift(args: argparse.Namespace) -> int:
+    circuit_ids = args.circuit or sorted(CIRCUITS)
+    all_clean: list = []
+
+    for circuit_id in circuit_ids:
+        circuit = CIRCUITS[circuit_id]
+        print(f"[{circuit_id}] Selecting {circuit.event_name} session (year={args.year or 'auto'})...")
+        sel = select_session(circuit.event_name, year=args.year, session_code=args.session)
+        print(f"  -> {sel.year} {sel.event_name} [{sel.session_code}]")
+
+        clean = extract_clean_laps(sel.session)
+        print(f"  -> {len(clean)} clean laps")
+        all_clean.extend(clean)
+
+    print(f"\nFitting shift model (all circuits pooled, {len(all_clean)} laps, design 4.10)...")
+    result = fit_shift_model(all_clean)
+
+    for warning in result.warnings:
+        print(f"  WARNING: {warning}")
+
+    print(f"\n  gearCount = {result.gear_count}")
+    print(f"  idleRpm    = {result.idle_rpm:.0f}")
+    print(f"  redlineRpm = {result.redline_rpm:.0f}")
+
+    print("\n  Per-gear RPM ~ Speed fit:")
+    for g in sorted(result.per_gear):
+        f = result.per_gear[g]
+        print(f"    gear {g}: rpm = {f.intercept:.0f} + {f.slope:.2f}*speed_mps  "
+              f"(n={f.n_samples}, R^2={f.r_squared:.3f})")
+
+    print("\n  Shift speed table (measured, design 4.10):")
+    for i in range(result.gear_count - 1):
+        up_kmh = result.shift_up_speeds[i] * 3.6
+        down_kmh = result.shift_down_speeds[i] * 3.6
+        print(f"    {i+1}->{i+2}: up={up_kmh:.0f} km/h (n={result.shift_up_n[i]})  "
+              f"down={down_kmh:.0f} km/h (n={result.shift_down_n[i]})")
+
+    print(
+        "\nCopy these into web/src/sim/vehicleParams.ts:\n"
+        f"  gearCount: {result.gear_count},\n"
+        f"  idleRpm: {result.idle_rpm:.0f},\n"
+        f"  redlineRpm: {result.redline_rpm:.0f},\n"
+        "  shiftUpSpeeds: [" + ", ".join(f"{v:.2f}" for v in result.shift_up_speeds) + "],\n"
+        "  shiftDownSpeeds: [" + ", ".join(f"{v:.2f}" for v in result.shift_down_speeds) + "],\n"
+        "  gearRpmCoeffs: [\n"
+        + "\n".join(
+            f"    {{ slope: {result.per_gear[g].slope:.2f}, intercept: {result.per_gear[g].intercept:.0f} }},"
+            for g in sorted(result.per_gear)
+        )
+        + "\n  ],"
     )
     return 0
 

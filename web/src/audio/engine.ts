@@ -8,6 +8,12 @@
 
 export interface VehicleAudioState {
   speed: number; // [m/s]
+  // sim/shiftModel.ts's updateGear() result (design 6.16/P17). idleRpm/
+  // redlineRpm are passed alongside as plain numbers (not a `ShiftParams`
+  // import) so this module keeps zero sim/ runtime dependency (design 6.1).
+  rpm: number;
+  idleRpm: number;
+  redlineRpm: number;
   throttle: number; // [0, 1]
   brake: number; // [0, 1]
   // sim/vehicle.ts's stepVehicle() result (design 6.3.3/6.11): true while
@@ -26,6 +32,15 @@ export interface VehicleAudioState {
 const NOISE_BUFFER_SECONDS = 2;
 const PARAM_SMOOTHING_S = 0.05; // avoids clicks from per-frame AudioParam updates
 const BRAKE_SOUND_MIN_SPEED = 3; // [m/s] (~11 km/h); brake sound fades to 0 below this
+
+// Engine pitch range (design 6.16/P17): the real RPM values from
+// `tools fit-shift` (design 4.10) are whatever this season's telemetry
+// happens to use, not a scale meant to be played back as literal Hz --
+// idleRpm/redlineRpm are normalized to [0, 1] and mapped onto this
+// audible range instead, feel-tuned like the rest of this module's
+// pitch/gain constants (not a measured value).
+const ENGINE_IDLE_HZ = 80;
+const ENGINE_REDLINE_HZ = 280;
 
 // Curb rumble (design 6.13/6.11, P13 follow-up): a periodic thump rather
 // than steady noise, since a real curb is a row of raised stripes, not a
@@ -222,7 +237,13 @@ export class EngineAudio {
     if (ctx.state === "suspended") void ctx.resume();
 
     const now = ctx.currentTime;
-    this.engineOsc.frequency.setTargetAtTime(80 + state.speed * 2, now, PARAM_SMOOTHING_S);
+    // design 6.16/P17: pitch tracks RPM (not speed directly) so a gear
+    // change's RPM drop -- not just speed -- reads as a shift; no extra
+    // "shift shock" logic is needed since updateGear()'s rpm already dips.
+    const rpmRange = Math.max(1, state.redlineRpm - state.idleRpm);
+    const rpmFrac = Math.min(1, Math.max(0, (state.rpm - state.idleRpm) / rpmRange));
+    const engineHz = ENGINE_IDLE_HZ + rpmFrac * (ENGINE_REDLINE_HZ - ENGINE_IDLE_HZ);
+    this.engineOsc.frequency.setTargetAtTime(engineHz, now, PARAM_SMOOTHING_S);
     this.engineGain.gain.setTargetAtTime(0.05 + state.throttle * 0.15, now, PARAM_SMOOTHING_S);
     // Real brakes don't squeal when the car is barely moving -- fade the
     // sound out smoothly below BRAKE_SOUND_MIN_SPEED rather than gating it
