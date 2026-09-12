@@ -17,6 +17,10 @@ A minimal driving simulator that reproduces real F1 circuits (Monaco GP, Suzuka)
 |---|---|---|
 | ![Monaco chase camera](docs/screenshots/monaco-chase.jpg) | ![Monaco cockpit camera](docs/screenshots/monaco-cockpit.jpg) | ![Suzuka chase camera](docs/screenshots/suzuka-chase.jpg) |
 
+| Monaco — hairpin | Suzuka — chicane |
+|---|---|
+| ![Monaco hairpin](docs/gifs/monaco-hairpin.gif) | ![Suzuka chicane](docs/gifs/suzuka-chicane.gif) |
+
 ## Layout
 
 ```
