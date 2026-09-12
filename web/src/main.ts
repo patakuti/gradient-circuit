@@ -31,7 +31,11 @@ import {
   STEER_RIGHT_KEYS,
   MODE_KEYS,
   RESET_KEYS,
+  type AxisSource,
+  type BipolarAxisSource,
 } from "./sim/input";
+import { TiltSensor, TiltSteerAxis, TiltThrottleAxis, TiltBrakeAxis } from "./sim/tiltInput";
+import { createTouchPedals, type TouchPedals } from "./ui/touchPedals";
 import { normalize, cross, rotateAroundAxis } from "./sim/vec";
 import { CameraManager } from "./camera/manager";
 import { ChaseRig } from "./camera/chaseRig";
@@ -39,7 +43,13 @@ import { CockpitRig } from "./camera/cockpitRig";
 import type { VehiclePose } from "./camera/types";
 import { EngineAudio } from "./audio/engine";
 import { Hud } from "./ui/hud";
-import { createControls, type DriveModeOption, type AssistStrengthOption } from "./ui/controls";
+import {
+  createControls,
+  type DriveModeOption,
+  type AssistStrengthOption,
+  type ThrottleBrakeSchemeOption,
+  type AndroidControlsConfig,
+} from "./ui/controls";
 import { COURSE_CATALOG, DEFAULT_COURSE_ID } from "./course/catalog";
 
 const FIXED_DT = 1 / 120; // design 6.4: physics runs at a fixed timestep
@@ -94,6 +104,92 @@ const ASSIST_STRENGTH_OPTIONS: AssistStrengthOption[] = [
   { id: "1", label: "100%" },
 ];
 const DEFAULT_ASSIST_STRENGTH_ID = "0.5";
+
+// Android input (design 6.15): `(pointer: coarse)` is the standard way to
+// detect a touch-primary device (unlike `"ontouchstart" in window`, which
+// is also true on some mouse-primary laptops with a touchscreen).
+const IS_TOUCH_PRIMARY = window.matchMedia("(pointer: coarse)").matches;
+
+const THROTTLE_BRAKE_SCHEME_OPTIONS: ThrottleBrakeSchemeOption[] = [
+  { id: "touch", label: "Touch pedals" },
+  { id: "tilt", label: "Tilt" },
+];
+const DEFAULT_THROTTLE_BRAKE_SCHEME_ID = "touch";
+
+// Settings persistence (design 6.10 follow-up): course switching is a full
+// navigation (reloads with a new `?course=`, since the whole world -- track
+// mesh, scenery, barriers -- changes), and a page reload with no persistence
+// would silently reset every setting below back to its hardcoded default.
+// The vehicle's *drive* state (position/speed/lap) resetting on a course
+// change is correct -- you can't keep driving on the old track's position on
+// a new one -- but the driver's chosen mode/assist/camera/mute/input-scheme
+// preferences should survive it, the same way they already survive a plain
+// page refresh on the same course.
+function loadSetting(key: string, fallback: string): string {
+  try {
+    return localStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveSetting(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // localStorage unavailable -- the selection just won't persist across reloads
+  }
+}
+
+const THROTTLE_BRAKE_SCHEME_STORAGE_KEY = "gradient-circuit:throttleBrakeScheme";
+function loadThrottleBrakeScheme(): string {
+  return loadSetting(THROTTLE_BRAKE_SCHEME_STORAGE_KEY, DEFAULT_THROTTLE_BRAKE_SCHEME_ID);
+}
+// Persists the choice for next launch; main()'s applyThrottleBrakeScheme
+// (P14 follow-up) hot-swaps the actual axis instances live, so this no
+// longer reloads the page -- an earlier version did, which reset the whole
+// drive (lap/position/speed) just from changing a setting.
+function saveThrottleBrakeScheme(id: string): void {
+  saveSetting(THROTTLE_BRAKE_SCHEME_STORAGE_KEY, id);
+}
+
+const DRIVE_MODE_STORAGE_KEY = "gradient-circuit:driveMode";
+function loadDriveMode(): DriveMode {
+  const saved = loadSetting(DRIVE_MODE_STORAGE_KEY, "auto");
+  return DRIVE_MODE_CYCLE.includes(saved as DriveMode) ? (saved as DriveMode) : "auto";
+}
+function saveDriveMode(mode: DriveMode): void {
+  saveSetting(DRIVE_MODE_STORAGE_KEY, mode);
+}
+
+const ASSIST_STRENGTH_STORAGE_KEY = "gradient-circuit:assistStrength";
+function loadAssistStrengthId(): string {
+  const saved = loadSetting(ASSIST_STRENGTH_STORAGE_KEY, DEFAULT_ASSIST_STRENGTH_ID);
+  return ASSIST_STRENGTH_OPTIONS.some((option) => option.id === saved) ? saved : DEFAULT_ASSIST_STRENGTH_ID;
+}
+function saveAssistStrengthId(id: string): void {
+  saveSetting(ASSIST_STRENGTH_STORAGE_KEY, id);
+}
+
+const CAMERA_STORAGE_KEY = "gradient-circuit:camera";
+function loadCameraId(): string | null {
+  try {
+    return localStorage.getItem(CAMERA_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+function saveCameraId(id: string): void {
+  saveSetting(CAMERA_STORAGE_KEY, id);
+}
+
+const MUTED_STORAGE_KEY = "gradient-circuit:muted";
+function loadMuted(): boolean {
+  return loadSetting(MUTED_STORAGE_KEY, "0") === "1";
+}
+function saveMuted(muted: boolean): void {
+  saveSetting(MUTED_STORAGE_KEY, muted ? "1" : "0");
+}
 
 const DEBUG = new URLSearchParams(window.location.search).get("debug") === "1";
 // design 6.10: `?course=<id>` picks which course/<id>.json to load, same
@@ -156,6 +252,18 @@ function poseFor(track: Track, state: VehicleState): VehiclePose {
   };
 }
 
+// Landscape lock (design 6.15.6, P14 follow-up): the Capacitor app locks
+// via AndroidManifest.xml's `android:screenOrientation="landscape"`, which
+// isn't available to a plain mobile-browser tab, so also try the Web API
+// here as a best-effort fallback -- browsers commonly refuse this outside
+// fullscreen, so a failure is silently ignored rather than surfaced.
+if (IS_TOUCH_PRIMARY) {
+  // TypeScript's DOM lib doesn't declare ScreenOrientation.lock() (it's
+  // supported by Chrome/Android despite that).
+  const orientation = screen.orientation as ScreenOrientation & { lock?: (type: string) => Promise<void> };
+  orientation.lock?.("landscape")?.catch(() => {});
+}
+
 async function main() {
   const { scene, camera, renderer } = createScene();
 
@@ -181,8 +289,13 @@ async function main() {
   scene.add(vehicleMesh);
 
   let vehicle: VehicleState = { s: 0, speed: 0, lap: 0, lateralOffset: 0, yaw: 0, steer: 0 };
-  let driveMode: DriveMode = "auto"; // design 6.14.5: default preserves the P11 throttle-only experience
-  let assistStrength = Number(DEFAULT_ASSIST_STRENGTH_ID); // design 6.14.1a, [0, 1]
+  let driveMode: DriveMode = loadDriveMode(); // design 6.14.5 default is "auto"; persisted so a course change doesn't reset it
+  let assistStrength = Number(loadAssistStrengthId()); // design 6.14.1a, [0, 1]
+  let shapedSteer = 0; // driver-steer pre-ramp state ("manual"/"assist" only), see MANUAL_STEER_SHAPE_RATE above
+  // design 6.15.6 follow-up: true while the Android settings menu is open.
+  // Freezes the physics step and engine sound in animate() below -- desktop
+  // never sets this (no menu button there, see ui/controls.ts).
+  let paused = false;
 
   // design 6.14.1a: entering "assist" or "manual" from "auto" seeds the
   // driver-steer shaping state (below) at the car's current steer angle, so
@@ -191,16 +304,89 @@ async function main() {
   function enterDriverSteeredMode(next: DriveMode) {
     if (next !== "auto" && driveMode === "auto") shapedSteer = vehicle.steer;
     driveMode = next;
+    saveDriveMode(next);
+  }
+
+  // design 6.3.6/6.15.3: shared by the `R` key (KeyTrigger below) and
+  // Android's on-screen reset button, which has no physical key to bind to.
+  function doReset() {
+    vehicle = resetVehicle(vehicle); // keeps s/lap, zeroes the rest
+    shapedSteer = 0;
   }
 
   const cameraManager = new CameraManager([new ChaseRig(), new CockpitRig()]);
   cameraManager.init(camera, poseFor(track, vehicle));
+  // Restores the driver's chosen viewpoint across a course change (design
+  // 6.10 follow-up); select() no-ops silently on an unknown/missing id, so
+  // a first-ever launch (nothing saved yet) just keeps init()'s default.
+  const savedCameraId = loadCameraId();
+  if (savedCameraId) cameraManager.select(savedCameraId);
 
   const engineAudio = new EngineAudio();
+  engineAudio.setMuted(loadMuted()); // takes effect once start() runs (first keydown/touchstart)
+
+  // Input axes (design 6.15.2): on a touch-primary device, steer always
+  // comes from device tilt (auto mode ignores it just like keyboard steer,
+  // design 6.14.5); throttle/brake come from whichever scheme is selected,
+  // and can be switched live (P14 follow-up) without losing the drive in
+  // progress -- both the tilt sensor and the touch pedals are created once
+  // up front and applyThrottleBrakeScheme() below just reassigns which one
+  // `throttle`/`brake` point to, instead of the page reloading.
+  // On desktop these stay the keyboard axes P12 already had.
+  let throttle: AxisSource;
+  let brake: AxisSource;
+  let steerAxis: BipolarAxisSource;
+  let tiltSensor: TiltSensor | null = null;
+  let touchPedals: TouchPedals | null = null;
+
+  function applyThrottleBrakeScheme(id: string): void {
+    if (id === "tilt" && tiltSensor) {
+      throttle = new TiltThrottleAxis(tiltSensor);
+      brake = new TiltBrakeAxis(tiltSensor);
+      touchPedals?.setVisible(false);
+    } else if (touchPedals) {
+      throttle = touchPedals.throttle;
+      brake = touchPedals.brake;
+      touchPedals.setVisible(true);
+    }
+  }
+
+  if (IS_TOUCH_PRIMARY) {
+    tiltSensor = new TiltSensor();
+    steerAxis = new TiltSteerAxis(tiltSensor);
+    touchPedals = createTouchPedals(document.body);
+    throttle = touchPedals.throttle; // placeholder until applyThrottleBrakeScheme runs below; always reassigned before use
+    brake = touchPedals.brake;
+    applyThrottleBrakeScheme(loadThrottleBrakeScheme());
+  } else {
+    throttle = new KeyboardAxis(THROTTLE_KEYS);
+    brake = new KeyboardAxis(BRAKE_KEYS);
+    steerAxis = new KeyboardBipolarAxis(STEER_LEFT_KEYS, STEER_RIGHT_KEYS);
+  }
+
+  const androidControls: AndroidControlsConfig | null = IS_TOUCH_PRIMARY
+    ? {
+        throttleBrakeSchemeOptions: THROTTLE_BRAKE_SCHEME_OPTIONS,
+        activeThrottleBrakeSchemeId: loadThrottleBrakeScheme(),
+        onThrottleBrakeSchemeSelect: (id) => {
+          saveThrottleBrakeScheme(id);
+          applyThrottleBrakeScheme(id);
+        },
+        onCalibrate: () => tiltSensor?.calibrate(),
+        onReset: doReset,
+        onMenuToggle: (open) => {
+          paused = open;
+        },
+      }
+    : null;
+
   const controls = createControls(
     document.body,
     cameraManager.list(),
-    (id) => cameraManager.select(id),
+    (id) => {
+      cameraManager.select(id);
+      saveCameraId(id);
+    },
     DRIVE_MODE_OPTIONS,
     (id) => {
       const next = DRIVE_MODE_OPTIONS.find((option) => option.id === id)?.id as DriveMode | undefined;
@@ -209,23 +395,29 @@ async function main() {
     COURSE_CATALOG,
     COURSE_ID,
     selectCourse,
-    (muted) => engineAudio.setMuted(muted),
+    loadMuted(),
+    (muted) => {
+      engineAudio.setMuted(muted);
+      saveMuted(muted);
+    },
     ASSIST_STRENGTH_OPTIONS,
-    DEFAULT_ASSIST_STRENGTH_ID,
+    loadAssistStrengthId(),
     (id) => {
       assistStrength = Number(id);
+      saveAssistStrengthId(id);
     },
+    androidControls,
   );
-  const hud = new Hud(document.body, DEBUG, course.meta.name);
+  controls.setActiveMode(driveMode); // syncs the dropdown + assist-select-disabled state with the persisted mode (design 6.10 follow-up)
+  const hud = new Hud(document.body, DEBUG, course.meta.name, IS_TOUCH_PRIMARY);
 
-  const throttle = new KeyboardAxis(THROTTLE_KEYS);
-  const brake = new KeyboardAxis(BRAKE_KEYS);
-  const steerAxis = new KeyboardBipolarAxis(STEER_LEFT_KEYS, STEER_RIGHT_KEYS);
   const modeTrigger = new KeyTrigger(MODE_KEYS);
   const resetTrigger = new KeyTrigger(RESET_KEYS);
   // design 6.11: browsers keep a fresh AudioContext suspended until a user
-  // gesture resumes it, so start the engine sound on the first keypress.
+  // gesture resumes it, so start the engine sound on the first keypress --
+  // or, on Android where there's no keyboard, the first touch.
   window.addEventListener("keydown", () => engineAudio.start(), { once: true });
+  window.addEventListener("touchstart", () => engineAudio.start(), { once: true, passive: true });
 
   let tPrev = performance.now();
   let accumulator = 0;
@@ -245,7 +437,6 @@ async function main() {
   // event from the physics step, so it -- not surface.kind -- is the right
   // signal for "currently at the wall".
   let lastWallContact = false;
-  let shapedSteer = 0; // driver-steer pre-ramp state ("manual"/"assist" only), see MANUAL_STEER_SHAPE_RATE above
 
   function animate() {
     requestAnimationFrame(animate);
@@ -253,16 +444,18 @@ async function main() {
     const now = performance.now();
     const frameDt = Math.min(MAX_FRAME_DT, Math.max(0, (now - tPrev) / 1000));
     tPrev = now;
-    accumulator += frameDt;
+    // While paused, `frameDt` is deliberately never added to `accumulator`
+    // (design 6.15.6 follow-up) -- otherwise the physics loop below would
+    // "owe" every second spent in the menu and burn through it in a burst
+    // of steps the instant the menu closes, exactly the runaway-catch-up
+    // failure MAX_FRAME_DT already guards against for a single frame.
+    if (!paused) accumulator += frameDt;
 
     if (modeTrigger.consume()) {
       enterDriverSteeredMode(nextDriveMode(driveMode));
       controls.setActiveMode(driveMode);
     }
-    if (resetTrigger.consume()) {
-      vehicle = resetVehicle(vehicle); // design 6.3.6: keeps s/lap, zeroes the rest
-      shapedSteer = 0;
-    }
+    if (resetTrigger.consume()) doReset();
 
     const lapBefore = vehicle.lap;
     while (accumulator >= FIXED_DT) {
@@ -337,15 +530,20 @@ async function main() {
     );
 
     const sample = track.sampleAt(vehicle.s);
-    engineAudio.update({
-      speed: vehicle.speed,
-      throttle: throttle.read(),
-      brake: brake.read(),
-      gripExceeded: lastGripExceeded,
-      onCurb: lastSurfaceKind === "curb",
-      onGrass: lastSurfaceKind === "grass",
-      wallContact: lastWallContact,
-    });
+    // Paused: skip the engine/tire audio update too, so it freezes with the
+    // drive instead of still revving to whatever the driver's tilt/pedal
+    // happens to read while the menu covers them (design 6.15.6 follow-up).
+    if (!paused) {
+      engineAudio.update({
+        speed: vehicle.speed,
+        throttle: throttle.read(),
+        brake: brake.read(),
+        gripExceeded: lastGripExceeded,
+        onCurb: lastSurfaceKind === "curb",
+        onGrass: lastSurfaceKind === "grass",
+        wallContact: lastWallContact,
+      });
+    }
     hud.update(
       {
         speedKmh: vehicle.speed * 3.6,
