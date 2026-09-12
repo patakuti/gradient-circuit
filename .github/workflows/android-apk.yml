@@ -20,7 +20,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # @capacitor/cli 8.x requires Node >= 22 ("npx cap sync android"
+          # fails with "[fatal] The Capacitor CLI requires NodeJS >=22.0.0"
+          # on Node 20, found when tagging v0.1.0). pages.yml stays on 20
+          # since it never runs the Capacitor CLI.
+          node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
 
