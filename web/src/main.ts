@@ -19,7 +19,7 @@ import { buildVehicleMesh } from "./render/vehicleMesh";
 import { buildScenery } from "./render/scenery";
 import { resetVehicle, stepVehicle, type VehicleInput, type VehicleState } from "./sim/vehicle";
 import { DEFAULT_VEHICLE_PARAMS } from "./sim/vehicleParams";
-import { computeAssist, type DriveMode } from "./sim/autopilot";
+import { computeAssist, cornerGripSpeed, type DriveMode } from "./sim/autopilot";
 import { surfaceAt, type SurfaceKind } from "./sim/surface";
 import {
   KeyboardAxis,
@@ -568,6 +568,19 @@ async function main() {
             lateralOffset: vehicle.lateralOffset,
             yawDeg: (vehicle.yaw * 180) / Math.PI,
             gripExceeded: lastGripExceeded,
+            // design 6.9/P15, debug-only: recomputed fresh here (not the
+            // physics substep's `surface`, out of scope by this point)
+            // purely for display -- negligible cost once per frame.
+            referenceSpeedKmh: sample.referenceSpeed * 3.6,
+            targetSpeedKmh:
+              Math.min(
+                sample.referenceSpeed,
+                cornerGripSpeed(
+                  sample.curvature,
+                  surfaceAt(courseOption.kind, sample, vehicle.lateralOffset).gripFactor,
+                  DEFAULT_VEHICLE_PARAMS,
+                ),
+              ) * 3.6,
             fps: frameDt > 0 ? 1 / frameDt : 0,
           }
         : undefined,

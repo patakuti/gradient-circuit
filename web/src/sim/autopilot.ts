@@ -101,7 +101,7 @@ function clamp(value: number, lo: number, hi: number): number {
  * themselves, not just an evaluation -- but since it's the same three
  * fields, the two can't silently drift apart (a rename breaks both).
  */
-function cornerGripSpeed(kappa: number, gripFactor: number, params: VehicleParams): number {
+export function cornerGripSpeed(kappa: number, gripFactor: number, params: VehicleParams): number {
   const absKappa = Math.abs(kappa);
   if (absKappa < 1e-9) return Infinity;
 
@@ -146,17 +146,21 @@ export function computeAssist(
   const steer = steerRange > 1e-9 ? clamp(delta / steerRange, -1, 1) : 0;
 
   // --- Braking: scan ahead for the slowest upcoming corner reachable
-  // under braking (design 6.14.3). Target speed is grip-limited only in
-  // P12 -- P14 replaces cornerGripSpeed's result here with
-  // min(referenceSpeed, cornerGripSpeed(...)) once course data carries a
-  // measured reference speed profile. ---
+  // under braking (design 6.14.3). Target speed at each scanned point is
+  // the smaller of the reference lap's pace (design 3.6/4.8, P15) and the
+  // grip-limited speed -- the reference alone could exceed grip on a
+  // surface the assist itself weakens (surface.gripFactor < 1), and grip
+  // alone ignores "trace the actual driver's pace" once P15 supplies it.
+  // Infinity (course has no reference block, design 5.1) makes min() a
+  // no-op, so this is unconditionally safe to apply.
   const aBrake = (params.maxBrakeForce * surface.gripFactor * BRAKE_MARGIN) / params.mass;
   const horizon = (state.speed * state.speed) / (2 * Math.max(aBrake, 1e-6)) + PREVIEW_MIN_M;
 
   let vTarget = Infinity;
   for (let ds = 0; ds <= horizon; ds += SCAN_STEP_M) {
     const sample = track.sampleAt(state.s + ds);
-    const vPoint = cornerGripSpeed(sample.curvature, surface.gripFactor, params);
+    const vGrip = cornerGripSpeed(sample.curvature, surface.gripFactor, params);
+    const vPoint = Math.min(sample.referenceSpeed, vGrip);
     vTarget = Math.min(vTarget, Math.sqrt(vPoint * vPoint + 2 * aBrake * ds));
   }
 

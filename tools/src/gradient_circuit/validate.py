@@ -22,10 +22,25 @@ from dataclasses import dataclass
 import numpy as np
 
 from .circuits import CircuitConfig
+from .reference import ADOPTED_GRIP_FIT, reachability_violation_fraction
 
 CLOSURE_MAX = 1.0
 
 CURVATURE_JUMP_MAX = 0.05
+
+# Design 4.8: a residual violation rate is expected and is never clamped
+# at generation time, only flagged -- design 6.14.3's runtime `min()`
+# handles every violating sample regardless of how large the fraction is,
+# so this criterion is a sanity net for a grossly broken reference (e.g.
+# corrupted telemetry), not a precision bound. Measured baseline (2026
+# Monaco GP race, 5 fastest clean laps): 8.7-9.5%, consistent across
+# drivers -- see reference.py's FALLBACK_VIOLATION_THRESHOLD docstring for
+# why that's expected, not a defect. Same value as that constant (cli.py
+# already re-tries a slower lap above this rate at generation time, so a
+# passing doc should essentially always clear this check; it exists to
+# catch a doc that wasn't generated through that fallback loop, e.g.
+# hand-edited).
+REACHABILITY_VIOLATION_MAX = 0.20
 
 
 @dataclass
@@ -108,6 +123,16 @@ def run_all(doc: dict, closure_gap: float, circuit: CircuitConfig) -> list[Check
     results.append(CheckResult(
         6, "no NaN/Inf", not has_nan_inf, "all sample arrays finite" if not has_nan_inf else "NaN/Inf found",
     ))
+
+    reference = doc.get("reference")
+    if reference is not None:
+        speed_ref = np.array(reference["speed"])
+        violation = reachability_violation_fraction(speed_ref, curvature, ADOPTED_GRIP_FIT)
+        results.append(CheckResult(
+            24, "reference speed reachability", violation <= REACHABILITY_VIOLATION_MAX,
+            f"violation_fraction={violation*100:.2f}% (max {REACHABILITY_VIOLATION_MAX*100:.0f}%), "
+            f"driver={reference['driver']} lap={reference['lap_number']}",
+        ))
 
     return results
 

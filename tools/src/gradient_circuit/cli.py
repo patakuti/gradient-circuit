@@ -16,7 +16,8 @@ from .session import select_session
 from .laps import extract_clean_laps, fastest_lap
 from .scale import measure_scale
 from .centerline import (
-    generate_centerline, DEFAULT_SG_WINDOW, DEFAULT_SG_POLYORDER, DEFAULT_SG_WINDOW_Z, DEFAULT_SG_WINDOW_NARROW,
+    generate_centerline, compute_tangent_normal,
+    DEFAULT_SG_WINDOW, DEFAULT_SG_POLYORDER, DEFAULT_SG_WINDOW_Z, DEFAULT_SG_WINDOW_NARROW,
 )
 from .width import raw_half_widths, apply_calibration, WidthCalibration
 from .geometry import (
@@ -28,6 +29,16 @@ from .geometry import (
 from .export import build_course_document, write_course_json
 from .validate import run_all, print_report
 from .gripfit import CircuitGripData, fit_pooled_grip_model, load_course_ref
+from .reference import (
+    ADOPTED_GRIP_FIT, FALLBACK_VIOLATION_THRESHOLD,
+    extract_reference_speed, reachability_violation_fraction,
+)
+
+# How many of the session's fastest clean laps to try, in pace order, as
+# the reference-speed source before giving up and using the fastest one
+# anyway (design 4.8: "fall back to the next-fastest lap" if a candidate's
+# reachability violation rate is too high to trust its telemetry/projection).
+MAX_REFERENCE_LAP_CANDIDATES = 5
 
 # Determined from measured lap-to-lap lateral scatter (design 4.5): median
 # raw p2/p98 full-width scatter on the 2026 Monaco GP race is only 0.16 m,
@@ -164,6 +175,43 @@ def _run_generate(args: argparse.Namespace) -> int:
     bank = compute_bank_zero(len(s))
     print(f"  -> bank_source={bank_source} (evidence insufficient; see design 4.6)")
 
+    print("Extracting reference speed profile...")
+    _, ref_normal = compute_tangent_normal(cl["ref_xyz"], closed=True)
+    candidates = sorted(clean, key=lambda lap: lap.lap_time_s)[:MAX_REFERENCE_LAP_CANDIDATES]
+    accepted = None  # (lap, speed_final, coverage, violation) of the first candidate under threshold
+    evaluated = []  # every candidate's (lap, speed_final, coverage, violation), in pace order
+    for candidate in candidates:
+        result = extract_reference_speed(candidate, scale, cl["ref_s"], cl["ref_xyz"], ref_normal)
+        speed_final = interp_periodic(s, cl["ref_s"], result.speed_ref, cl["length"])
+        violation = reachability_violation_fraction(speed_final, curvature, ADOPTED_GRIP_FIT)
+        print(f"  -> {candidate.driver} #{candidate.lap_number} ({candidate.lap_time_s:.3f}s): "
+              f"coverage={result.coverage*100:.1f}% reachability_violation={violation*100:.2f}%")
+        evaluated.append((candidate, speed_final, result.coverage, violation))
+        if violation <= FALLBACK_VIOLATION_THRESHOLD:
+            accepted = evaluated[-1]
+            break
+        print(f"     violation exceeds {FALLBACK_VIOLATION_THRESHOLD*100:.0f}% threshold, "
+              "trying the next-fastest clean lap (design 4.8 fallback)...")
+
+    if accepted is None:
+        # None of the fastest MAX_REFERENCE_LAP_CANDIDATES laps met the
+        # threshold. Falling back further would mean using a much slower
+        # lap as "the reference pace", which defeats the point (design
+        # 3.6's "trace the actual driver's pace"). Use the outright
+        # fastest lap anyway (design 4.8: violations are logged, never
+        # clamped here) and say plainly that this is a low-confidence
+        # choice.
+        accepted = evaluated[0]
+        print(f"  WARNING: no candidate among the {len(candidates)} fastest clean laps met the "
+              f"reachability threshold; using the fastest lap ({accepted[0].driver} "
+              f"#{accepted[0].lap_number}) anyway. Confidence: low.")
+
+    reference_lap, reference_speed, reference_coverage, reference_violation = accepted
+
+    print(f"  -> reference lap: {reference_lap.driver} #{reference_lap.lap_number} "
+          f"({reference_lap.lap_time_s:.3f}s), coverage={reference_coverage*100:.1f}%, "
+          f"reachability_violation={reference_violation*100:.2f}%")
+
     doc = build_course_document(
         name=circuit.name,
         event=sel.event_name,
@@ -184,6 +232,11 @@ def _run_generate(args: argparse.Namespace) -> int:
         bank=bank,
         length=cl["length"],
         ds=1.0,
+        reference_driver=reference_lap.driver,
+        reference_lap_number=reference_lap.lap_number,
+        reference_lap_time_s=reference_lap.lap_time_s,
+        reference_coverage=reference_coverage,
+        reference_speed=reference_speed,
     )
 
     print("Validating...")

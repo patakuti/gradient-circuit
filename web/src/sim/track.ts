@@ -21,11 +21,23 @@ export interface TrackSample {
   curvature: number;
   grade: number;
   bank: number;
+  /** Reference lap speed [m/s] (design 4.8/6.14.3, P15). Infinity where
+   * the loaded course has no reference block. */
+  referenceSpeed: number;
 }
 
 const WORLD_UP: Vec3 = vec3(0, 1, 0);
 
 function lerpAngleField(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+/** Like lerpAngleField, but Infinity-safe: a course with no reference
+ * block has every sample at Infinity, and Infinity + (Infinity-Infinity)*t
+ * is NaN, not Infinity. Any endpoint at Infinity keeps the result at
+ * Infinity (design 6.14.3's min() must never see a NaN). */
+function lerpReferenceSpeed(a: number, b: number, t: number): number {
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return Infinity;
   return a + (b - a) * t;
 }
 
@@ -43,6 +55,7 @@ export class Track {
   private readonly curvature: Float64Array;
   private readonly grade: Float64Array;
   private readonly bank: Float64Array;
+  private readonly referenceSpeed: Float64Array;
 
   private constructor(course: Course) {
     this.length = course.length;
@@ -56,6 +69,7 @@ export class Track {
     this.curvature = new Float64Array(n);
     this.grade = new Float64Array(n);
     this.bank = new Float64Array(n);
+    this.referenceSpeed = new Float64Array(n);
 
     for (let i = 0; i < n; i++) {
       const sample = course.samples[i];
@@ -65,6 +79,7 @@ export class Track {
       this.curvature[i] = sample.curvature;
       this.grade[i] = sample.grade;
       this.bank[i] = sample.bank;
+      this.referenceSpeed[i] = sample.referenceSpeed;
     }
 
     // tangent: central difference over neighboring samples, periodic wrap.
@@ -126,6 +141,7 @@ export class Track {
       curvature: lerpAngleField(this.curvature[i], this.curvature[j], t),
       grade: lerpAngleField(this.grade[i], this.grade[j], t),
       bank: lerpAngleField(this.bank[i], this.bank[j], t),
+      referenceSpeed: lerpReferenceSpeed(this.referenceSpeed[i], this.referenceSpeed[j], t),
     };
   }
 
