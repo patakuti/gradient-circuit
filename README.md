@@ -11,6 +11,12 @@ A minimal driving simulator that reproduces real F1 circuits (Monaco GP, Suzuka)
 - Also works on Android (Chrome, or as an installable APK wrapped with Capacitor). Steer by tilting the device; use touch pedals or front/back tilt for throttle/brake.
 - Course data generation (Python) and the simulator (TypeScript/Three.js) are connected through a loosely-coupled intermediate format (JSON), designed to allow porting to a different engine later.
 
+## Screenshots
+
+| Monaco (chase camera) | Monaco (cockpit camera) | Suzuka (chase camera) |
+|---|---|---|
+| ![Monaco chase camera](docs/screenshots/monaco-chase.jpg) | ![Monaco cockpit camera](docs/screenshots/monaco-cockpit.jpg) | ![Suzuka chase camera](docs/screenshots/suzuka-chase.jpg) |
+
 ## Layout
 
 ```
