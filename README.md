@@ -176,4 +176,4 @@ uv run gradient-circuit fit-shift
 
 ## License
 
-TBD.
+[MIT](LICENSE)
