@@ -1,6 +1,10 @@
 /**
  * HUD overlay: speed / throttle / brake / steer / elevation / grade / lap /
- * lap time / drive mode / active camera, plus an optional debug panel.
+ * lap time / drive mode / active camera, plus an optional debug panel. On a
+ * touch-primary device (design 6.15.6) this shrinks to speed / lap / mode
+ * only -- the keyboard-hint lines ("[M] switch" etc.) don't apply there,
+ * the rest is dropped to leave room on a small landscape screen, and the
+ * full detail is one tap away in the menu-button settings panel instead.
  *
  * Design ref: 02_design.md section 6.9. DOM-only, no `three` or `sim/`
  * imports -- main.ts computes every displayed value and passes plain data
@@ -45,7 +49,12 @@ export class Hud {
   private readonly mainLines: HTMLElement;
   private readonly debugLines: HTMLElement | null;
 
-  constructor(parent: HTMLElement, showDebug: boolean, courseName: string) {
+  constructor(
+    parent: HTMLElement,
+    showDebug: boolean,
+    courseName: string,
+    private readonly minimal: boolean,
+  ) {
     const root = document.createElement("div");
     root.style.cssText =
       "position:fixed;top:12px;left:12px;padding:10px 14px;background:rgba(0,0,0,0.55);" +
@@ -72,19 +81,24 @@ export class Hud {
   }
 
   update(data: HudData, debug?: DebugData): void {
-    this.mainLines.textContent =
-      `speed: ${data.speedKmh.toFixed(0)} km/h\n` +
-      `throttle: ${data.throttlePercent.toFixed(0)}%  brake: ${data.brakePercent.toFixed(0)}%  ` +
-      `steer: ${data.steerPercent >= 0 ? "L" : "R"}${Math.abs(data.steerPercent).toFixed(0)}%\n` +
-      `elevation: ${data.elevationM.toFixed(1)} m\n` +
-      `grade: ${data.gradePercent.toFixed(1)}%\n` +
-      `lap: ${data.lap}  dist: ${data.lapDistanceM.toFixed(0)} m\n` +
-      `last lap: ${formatLapTime(data.lastLapTimeS)}\n` +
-      `mode: ${data.driveModeLabel}${
-        data.assistStrengthPercent !== null ? ` (${data.assistStrengthPercent.toFixed(0)}%)` : ""
-      }  [M] switch\n` +
-      `surface: ${data.surfaceLabel}  [R] reset\n` +
-      `camera: ${data.cameraLabel}  [C] switch`;
+    this.mainLines.textContent = this.minimal
+      ? `speed: ${data.speedKmh.toFixed(0)} km/h\n` +
+        `lap: ${data.lap}  last: ${formatLapTime(data.lastLapTimeS)}\n` +
+        `mode: ${data.driveModeLabel}${
+          data.assistStrengthPercent !== null ? ` (${data.assistStrengthPercent.toFixed(0)}%)` : ""
+        }`
+      : `speed: ${data.speedKmh.toFixed(0)} km/h\n` +
+        `throttle: ${data.throttlePercent.toFixed(0)}%  brake: ${data.brakePercent.toFixed(0)}%  ` +
+        `steer: ${data.steerPercent >= 0 ? "L" : "R"}${Math.abs(data.steerPercent).toFixed(0)}%\n` +
+        `elevation: ${data.elevationM.toFixed(1)} m\n` +
+        `grade: ${data.gradePercent.toFixed(1)}%\n` +
+        `lap: ${data.lap}  dist: ${data.lapDistanceM.toFixed(0)} m\n` +
+        `last lap: ${formatLapTime(data.lastLapTimeS)}\n` +
+        `mode: ${data.driveModeLabel}${
+          data.assistStrengthPercent !== null ? ` (${data.assistStrengthPercent.toFixed(0)}%)` : ""
+        }  [M] switch\n` +
+        `surface: ${data.surfaceLabel}  [R] reset\n` +
+        `camera: ${data.cameraLabel}  [C] switch`;
 
     if (this.debugLines && debug) {
       this.debugLines.textContent =

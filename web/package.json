@@ -13,6 +13,9 @@
     "three": "^0.169.0"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/cli": "^8.5.2",
+    "@capacitor/core": "^8.5.2",
     "@eslint/js": "^9.13.0",
     "@types/three": "^0.169.0",
     "eslint": "^9.13.0",
