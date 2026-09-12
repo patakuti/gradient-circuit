@@ -15,9 +15,9 @@ import { Track } from "./sim/track";
 import { buildTrackMesh } from "./render/trackMesh";
 import { buildBarriers } from "./render/barrier";
 import { setupEnvironment } from "./render/environment";
-import { buildVehicleMesh } from "./render/vehicleMesh";
+import { buildVehicleMesh, WHEEL_RADIUS } from "./render/vehicleMesh";
 import { buildScenery } from "./render/scenery";
-import { resetVehicle, stepVehicle, type VehicleInput, type VehicleState } from "./sim/vehicle";
+import { maxSteerAngleAt, resetVehicle, stepVehicle, type VehicleInput, type VehicleState } from "./sim/vehicle";
 import { DEFAULT_VEHICLE_PARAMS, DEFAULT_SHIFT_PARAMS } from "./sim/vehicleParams";
 import { updateGear, INITIAL_GEAR } from "./sim/shiftModel";
 import { computeAssist, cornerGripSpeed, type DriveMode } from "./sim/autopilot";
@@ -290,7 +290,7 @@ async function main() {
   scene.add(buildBarriers(track, courseOption.kind));
   scene.add(buildScenery(track, courseOption));
   const vehicleMesh = buildVehicleMesh();
-  scene.add(vehicleMesh);
+  scene.add(vehicleMesh.group);
 
   let vehicle: VehicleState = { s: 0, speed: 0, lap: 0, lateralOffset: 0, yaw: 0, steer: 0 };
   // design 6.14.5/6.14.6 default is "auto"; persisted so a course change doesn't reset it
@@ -530,24 +530,34 @@ async function main() {
 
     // design 6.8: same position/orientation technique as the camera rigs
     // (chaseRig.ts/cockpitRig.ts) -- set `up` before lookAt so it uses ours.
-    vehicleMesh.position.set(pose.position.x, pose.position.y, pose.position.z);
-    vehicleMesh.up.set(pose.up.x, pose.up.y, pose.up.z);
-    vehicleMesh.lookAt(
+    vehicleMesh.group.position.set(pose.position.x, pose.position.y, pose.position.z);
+    vehicleMesh.group.up.set(pose.up.x, pose.up.y, pose.up.z);
+    vehicleMesh.group.lookAt(
       pose.position.x + pose.forward.x,
       pose.position.y + pose.forward.y,
       pose.position.z + pose.forward.z,
     );
+
+    // design 6.8.1: front wheel steer angle, display-only (doesn't feed
+    // back into stepVehicle). Reuses the same function the physics model
+    // itself uses for the steer limit, so the visible angle matches the
+    // number driving the actual grip/curvature model.
+    const steerAngle = maxSteerAngleAt(vehicle.speed, DEFAULT_VEHICLE_PARAMS) * vehicle.steer;
+    for (const pivot of vehicleMesh.frontSteerPivots) pivot.rotation.y = steerAngle;
 
     const sample = track.sampleAt(vehicle.s);
     // design 6.16/P17: frame-rate cadence, not the fixed physics step --
     // gear/RPM never feed back into stepVehicle (requirement 4.9).
     const shift = updateGear(currentGear, vehicle.speed, DEFAULT_SHIFT_PARAMS);
     currentGear = shift.gear;
-    // Paused: skip the engine/tire audio and gauge updates too, so they
-    // freeze with the drive instead of still revving to whatever the
-    // driver's tilt/pedal happens to read while the menu covers them
-    // (design 6.15.6 follow-up).
+    // Paused: skip the engine/tire audio, gauge updates, and wheel-roll
+    // animation too, so they freeze with the drive instead of still
+    // revving/spinning to whatever the driver's tilt/pedal happens to read
+    // while the menu covers them (design 6.15.6 follow-up).
     if (!paused) {
+      const rollDelta = (vehicle.speed * frameDt) / WHEEL_RADIUS;
+      for (const axle of vehicleMesh.wheelAxles) axle.rotation.x += rollDelta;
+
       engineAudio.update({
         speed: vehicle.speed,
         rpm: shift.rpm,
