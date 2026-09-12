@@ -314,7 +314,11 @@ async function main() {
     shapedSteer = 0;
   }
 
-  const cameraManager = new CameraManager([new ChaseRig(), new CockpitRig()]);
+  // onChange persists the driver's viewpoint from wherever it changes --
+  // the UI dropdown *and* the `C` key (design 6.10 follow-up; the latter
+  // used to go untracked, so cycling cameras with `C` and then switching
+  // course silently reverted to the default view on reload).
+  const cameraManager = new CameraManager([new ChaseRig(), new CockpitRig()], saveCameraId);
   cameraManager.init(camera, poseFor(track, vehicle));
   // Restores the driver's chosen viewpoint across a course change (design
   // 6.10 follow-up); select() no-ops silently on an unknown/missing id, so
@@ -383,10 +387,7 @@ async function main() {
   const controls = createControls(
     document.body,
     cameraManager.list(),
-    (id) => {
-      cameraManager.select(id);
-      saveCameraId(id);
-    },
+    (id) => cameraManager.select(id), // persistence now goes through CameraManager's onChange above
     DRIVE_MODE_OPTIONS,
     (id) => {
       const next = DRIVE_MODE_OPTIONS.find((option) => option.id === id)?.id as DriveMode | undefined;

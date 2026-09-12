@@ -3,7 +3,7 @@
  * key. Adding a viewpoint is registering one more rig here -- no other
  * switching/input code changes.
  *
- * Design ref: 02_design.md section 6.6.
+ * Design ref: 02_design.md section 6.6/6.10 follow-up.
  */
 
 import type { PerspectiveCamera } from "three";
@@ -16,7 +16,16 @@ export class CameraManager {
   private index = 0;
   private lastPose: VehiclePose | null = null;
 
-  constructor(rigs: CameraRig[]) {
+  /**
+   * @param onChange Fired with the new rig's id whenever the active rig
+   *   changes, from either `select()` or the `C` key -- so main.ts can persist
+   *   the choice (design 6.10 follow-up) from one place instead of only the
+   *   UI dropdown's callback, which used to miss `C`-key changes entirely.
+   */
+  constructor(
+    rigs: CameraRig[],
+    private readonly onChange?: (id: string) => void,
+  ) {
     if (rigs.length === 0) throw new Error("CameraManager requires at least one rig");
     this.rigs = rigs;
     window.addEventListener("keydown", this.handleKeyDown);
@@ -49,11 +58,13 @@ export class CameraManager {
     if (idx === -1 || idx === this.index || !this.lastPose) return;
     this.index = idx;
     this.current.reset(this.lastPose);
+    this.onChange?.(this.current.id);
   }
 
   private handleKeyDown = (event: KeyboardEvent): void => {
     if (event.code !== CYCLE_KEY || !this.lastPose) return;
     this.index = (this.index + 1) % this.rigs.length;
     this.current.reset(this.lastPose);
+    this.onChange?.(this.current.id);
   };
 }
