@@ -87,6 +87,7 @@ function drawDial(
 
 export class Gauges {
   private readonly ctx: CanvasRenderingContext2D;
+  private readonly canvas: HTMLCanvasElement;
   private readonly size: number;
 
   constructor(parent: HTMLElement, minimal: boolean) {
@@ -98,14 +99,30 @@ export class Gauges {
     const dpr = window.devicePixelRatio || 1;
     canvas.width = this.size * 2 * dpr;
     canvas.height = this.size * dpr;
+    // On a touch-primary (Android) layout the throttle pedal
+    // (ui/touchPedals.ts) also anchors to the bottom-right corner, so
+    // placing the gauges there overlaps it. Move the gauges to the
+    // top-right instead, below the settings "☰" menu button
+    // (ui/controls.ts: right:12px;top:12px;44x44px) rather than beside it
+    // (design 6.16, P19 follow-up).
+    const corner = minimal ? "right:8px;top:64px;" : "right:8px;bottom:8px;";
     canvas.style.cssText =
-      `position:fixed;right:8px;bottom:8px;width:${this.size * 2}px;height:${this.size}px;` +
-      "z-index:10;pointer-events:none;";
+      `position:fixed;${corner}width:${this.size * 2}px;height:${this.size}px;` + "z-index:10;pointer-events:none;";
     parent.appendChild(canvas);
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("Gauges: 2D canvas context unavailable");
     ctx.scale(dpr, dpr);
     this.ctx = ctx;
+    this.canvas = canvas;
+  }
+
+  /** Hides the gauges while the Android settings panel is open (design
+   * 6.15.3's panel is vertically centered on the right and, at this
+   * top-right gauge position, would otherwise sit on top of it -- P19
+   * follow-up, found via emulator screenshot). Mirrors
+   * `TouchPedals.setVisible()`'s existing hide/show pattern. */
+  setVisible(visible: boolean): void {
+    this.canvas.style.display = visible ? "" : "none";
   }
 
   /** Caller skips this while paused (design 6.15.6/P14), same as
