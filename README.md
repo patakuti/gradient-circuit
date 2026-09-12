@@ -1,34 +1,34 @@
 # Gradient Circuit
 
-F1サーキット(モナコGP、鈴鹿)を、高低差を含めて再現し、その上を周回できる最低限のドライビングシミュレータ。
+A minimal driving simulator that reproduces real F1 circuits (Monaco GP, Suzuka) — including elevation — and lets you drive laps around them in your browser.
 
-## 概要
+## Overview
 
-- FastF1のテレメトリデータからサーキットのコースデータ(センターライン・道幅・高低差・曲率)を生成。モナコ・鈴鹿に対応
-- ブラウザ(Three.js)上でスロットル・ブレーキ・ステアリング操作による周回シミュレーションを実行。センターライン自動追従・支援付きマニュアル(Assist、支援の強さ25/50/75%)・マニュアル操舵を単一のドロップダウンで切り替え可能。コースを外れた場合の路面種別(縁石・芝生・バリア)による挙動も再現
-- Android(Chromeブラウザ、またはCapacitorでラップしたインストール可能なAPK)にも対応。端末の傾きでステアリング、タッチペダルまたは前後傾きでスロットル/ブレーキを操作できる
-- コースデータ生成(Python)とシミュレータ(TypeScript/Three.js)を疎結合な中間形式(JSON)で接続し、将来の別エンジンへの移植を考慮
+- Generates circuit course data (centerline, track width, elevation, curvature) from FastF1 telemetry. Monaco and Suzuka are supported.
+- Runs a lap-driving simulation in the browser (Three.js) with throttle, brake, and steering. A single dropdown switches between centerline auto-follow, assisted manual steering (Assist, with 25/50/75% assist strength), and fully manual steering. Behavior when you go off-track (curb, grass, barrier) is modeled per surface type.
+- Also works on Android (Chrome, or as an installable APK wrapped with Capacitor). Steer by tilting the device; use touch pedals or front/back tilt for throttle/brake.
+- Course data generation (Python) and the simulator (TypeScript/Three.js) are connected through a loosely-coupled intermediate format (JSON), designed to allow porting to a different engine later.
 
-## 構成
+## Layout
 
 ```
 gradient-circuit/
-├── tools/   # コースデータ生成 (Python + FastF1)
-└── web/     # 周回シミュレータ (Vite + TypeScript + Three.js)
+├── tools/   # Course data generation (Python + FastF1)
+└── web/     # The driving simulator (Vite + TypeScript + Three.js)
 ```
 
-## セットアップ
+## Setup
 
-### コースデータ生成 (tools/)
+### Course data generation (`tools/`)
 
 ```bash
 cd tools
 uv sync
 ```
 
-Python 3.12 以上、[uv](https://docs.astral.sh/uv/) が必要です。
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
-### シミュレータ (web/)
+### Simulator (`web/`)
 
 ```bash
 cd web
@@ -36,46 +36,48 @@ npm install
 npm run dev
 ```
 
-Node.js 18 以上が必要です。`npm run dev` 後、表示された URL(既定 http://localhost:5173/)をブラウザで開きます。
+Requires Node.js 18+. After `npm run dev`, open the printed URL (default `http://localhost:5173/`) in your browser.
 
-キーボードの ↑ / W でスロットル、↓ / S でブレーキ、← / A で左ステア、→ / D で右ステア操作ができます。ステアは押している間にアナログ的に切れ込み、離すとセルフセンタリングで中立に戻ります。コーナーで曲率に対して速度が高すぎる場合、自動減速はせず、車両が外側へ膨らみます(アンダーステア)。手前で適切にブレーキをかけることでこれを避けられます。
+## How to play
 
-走行モードは `M` キー、または画面左下の「mode」ドロップダウンで切り替えられます(Manual → Assist 25% → Assist 50% → Assist 75% → Auto の5段階を順に巡回)。
+Use the arrow keys / WASD: `↑`/`W` for throttle, `↓`/`S` for brake, `←`/`A` to steer left, `→`/`D` to steer right. Steering ramps up smoothly while held and self-centers back to neutral when released. If you enter a corner too fast for its curvature, the car doesn't auto-brake — it pushes wide (understeer) instead, so brake early enough to hold your line.
 
-| モード | 内容 |
+Cycle the drive mode with the `M` key, or the "mode" dropdown at the bottom left (Manual → Assist 25% → Assist 50% → Assist 75% → Auto, looping back to Manual).
+
+| Mode | Behavior |
 |---|---|
-| Auto(既定) | ステアリングとブレーキを運転支援が自動で行います。スロットル操作だけでも周回できます。目標速度は実テレメトリの参照ラップのペースとグリップ限界の小さい方です(下記) |
-| Assist 25% / 50% / 75% | ステアリング・ブレーキとも自分で操作しますが、運転支援が選んだ強さで両方を補助します(ハンドルはラインへ戻す方向に、ブレーキは不足分を補う方向に) |
-| Manual | ステアリング・ブレーキとも自分で操作します |
+| Auto (default) | Driving assistance handles steering and braking automatically — throttle alone is enough to complete laps. The target speed is the lesser of the real reference lap's pace and the grip limit (see below) |
+| Assist 25% / 50% / 75% | You control steering and braking yourself, with assistance blended in at the chosen strength (steering nudged back toward the line, braking topped up where you're short) |
+| Manual | You control steering and braking entirely yourself |
 
-コースを外れると路面によって挙動が変わります。モナコ(ストリートコース)は路面のすぐ外がバリアです。鈴鹿(専用サーキット)は縁石(0.6m、グリップやや低下)→芝生(6m、グリップ・加速力が大きく低下)→バリアの順で、芝生に出ると明確に失速しつつステアリングでコースへ復帰できます。どちらもバリアは越えられず、沿って走行を続けられます。`R` キーでコース上(直近のセンターライン、速度0)にリセットできます(ラップ数・距離は保持)。現在の路面種別はHUDに表示されます。
+Going off-track changes behavior depending on the surface. Monaco (a street circuit) has a barrier immediately outside the track. Suzuka (a purpose-built circuit) has curb (0.6 m, slightly reduced grip) → grass (6 m, grip and acceleration drop sharply) → barrier, so running onto the grass noticeably slows you down while you can still steer back onto the track. Neither course lets you cross the barrier, but you can keep driving alongside it. Press `R` to reset onto the track (nearest centerline point, speed 0) — lap count and distance are preserved. The current surface type is shown in the HUD.
 
-`C` キーでチェイスカメラ(後方追従)とコックピットカメラ(運転席目線)を切り替えられます。手続き生成した簡易的な車体モデルを両カメラ視点で表示します(外部3Dモデルは使用していません)。先細りのノーズ・コックピット上のハロー・2トーンのリバリー(特定の実在チームを模したものではありません)に加え、前輪はステアリング操作に応じて切れ角が変化し、4輪とも走行速度に応じて回転して見えます。1 周完了するとブラウザの開発者コンソールにログが出力されます。
+Press `C` to switch between the chase camera (following from behind) and the cockpit camera (driver's-eye view). A procedurally generated car model (no external 3D assets) is shown in both views: a tapered nose, a halo above the cockpit, and a two-tone livery (not modeled after any real team). The front wheels turn visually with your steering input, and all four wheels appear to rotate based on your speed. Completing a lap logs to the browser's developer console.
 
-エンジン音・ブレーキ音・グリップ限界を超えて外側へ膨らんでいるときのスクラブ音に加え、縁石・芝生・バリア接触時の音も再生します(外部音声ファイルは使わず、Web Audio APIで手続き生成)。ブラウザの自動再生制限のため、最初のキー入力で音が有効になります。画面左下の「mute」ボタンでミュートできます。
+Engine, braking, and tire-scrub sounds (heard while pushing wide beyond the grip limit) play alongside curb/grass/barrier contact sounds — all procedurally generated with the Web Audio API, no external audio files. Due to browser autoplay restrictions, sound activates on your first key press. Mute it with the "mute" button at the bottom left.
 
-ギア(1〜8速)とエンジン回転数は速度から自動的に決まります(手動変速はありません)。ギア段と速度の対応、シフトアップ/ダウンの境界速度は実テレメトリ(FastF1の`nGear`/`RPM`チャンネル)から実測したものです。エンジン音のピッチはエンジン回転数に連動し、シフトアップの瞬間にピッチが下がります。画面右下にタコメーター・スピードメーターを表示します(現在のギア段はHUDのテキストにも表示されます)。詳細は `02_design.md` 4.10/6.16 章を参照してください。
+Gear (1st–8th) and engine RPM are derived automatically from your speed (there's no manual shifting). The gear/speed mapping and the shift-up/down thresholds were measured from real telemetry (FastF1's `nGear`/`RPM` channels). Engine pitch tracks RPM and dips at the instant of each upshift. A tachometer and speedometer are shown at the bottom right (the current gear also appears in the text HUD). See `02_design.md` sections 4.10/6.16 for details.
 
-コーナリンググリップ限界は速度に応じて変化します(`min(a0 + k*v^2, a_cap)`)。係数は目視の推定ではなく、実テレメトリ(全クリーンラップ)からの最小二乗フィットで決定しています。詳細と測定結果は `02_design.md` 4.9 章を参照してください。
+Cornering grip limits vary with speed (`min(a0 + k*v^2, a_cap)`). The coefficients weren't eyeballed — they come from a least-squares fit against real telemetry (all clean laps). See `02_design.md` section 4.9 for details and measurements.
 
-Autoモードの目標速度は、そのコースの最速クリーンラップ(実テレメトリ)の速度プロファイルと、上記グリップ限界から求まる速度の小さい方です。「実際のドライバーのペースをトレースする」ことを目的としており、目視・推測ではなく `course/*.json` に同梱された参照速度データに基づきます。どのドライバー・ラップかは `?debug=1` のデバッグ表示(reference/target)で確認できます。詳細は `02_design.md` 4.8/6.14.3 章を参照してください。
+In Auto mode, the target speed is the lesser of the course's fastest clean lap's real speed profile and the grip-limit speed above — the goal is to trace an actual driver's pace, based on reference speed data bundled in `course/*.json` rather than guesswork. Which driver/lap was used is shown in the `?debug=1` debug overlay (reference/target). See `02_design.md` sections 4.8/6.14.3 for details.
 
-コース外にも手続き生成した簡易的な景観を配置します(外部3Dモデルは使用していません)。モナコはビル群・トンネル区間・港区間(水面とヨット)、鈴鹿は縁石・芝生・樹木と、コースの性格に応じて見た目が変わります。モナコのビルは地中海沿岸の街並みを意識した複数色(クリーム・オークル・テラコッタ・淡いピンク等)で表示され、鈴鹿の樹木は広葉樹風(丸みのある樹冠)と針葉樹風(円錐)が混在します。
+Procedurally generated scenery (no external 3D assets) surrounds the track, styled to match each course's character: Monaco has buildings, a tunnel section, and a harbor section (water and yachts); Suzuka has curbs, grass, and trees. Monaco's buildings use a palette of pale tones (cream, ochre, terracotta, soft pink, etc.) evoking a Mediterranean streetscape, and Suzuka's trees mix broadleaf-style (rounded canopies) and conifer-style (cones).
 
-`npm run build` で `web/dist/` に本番ビルドを出力します。`npm run lint` で ESLint を実行します(`sim/` 配下から `three` を import すると検出されます)。
+`npm run build` outputs a production build to `web/dist/`. `npm run lint` runs ESLint (it will flag any `import` of `three` from under `sim/`).
 
-### Android版 (web/android/)
+### Android (`web/android/`)
 
-タッチ主体の端末(スマートフォン等)でブラウザを開くと、キーボードUIの代わりにタッチ操作用の画面になります。横向き(landscape)に固定されます。
+Opening the app in a browser on a touch-primary device (e.g. a smartphone) switches from the keyboard UI to a touch-oriented layout, locked to landscape orientation.
 
-- **ステアリング**: 端末を左右に傾けます
-- **スロットル/ブレーキ**: 画面左下(ブレーキ)・右下(スロットル)のタッチペダル、または設定パネルの「throttle/brake」ドロップダウンで「Tilt」を選ぶと端末の前後の傾きで操作できます(前傾=スロットル、後傾=ブレーキ)
-- **設定パネル**: 画面右上の「☰」ボタンで開閉します(vfpvの一時停止メニューと同様のパターン。開いている間は走行が一時停止します)。走行モード(Manual/Assist 25/50/75%/Auto)切り替え、傾きのキャリブレーション、`R` キー相当のリセットボタン、カメラ・コース選択、ミュートをまとめています
-- **HUD**: 画面左上には speed / lap / mode の最小限の表示のみです。詳細(スロットル/ブレーキ/ステア%、標高、路面種別など)は設定パネル側、または `?debug=1` のデバッグ表示で確認できます
+- **Steering**: tilt the device left/right
+- **Throttle/brake**: touch pedals at the bottom left (brake) and bottom right (throttle), or select "Tilt" in the settings panel's "throttle/brake" dropdown to use front/back tilt instead (tilt forward = throttle, tilt back = brake)
+- **Settings panel**: opened/closed with the "☰" button at the top right (driving pauses while it's open). It bundles drive mode switching (Manual/Assist 25/50/75%/Auto), tilt calibration, a reset button (equivalent to the `R` key), camera/course selection, and mute
+- **HUD**: the top-left display is reduced to just speed / lap / mode. More detail (throttle/brake/steer %, elevation, surface type, etc.) is available in the settings panel or the `?debug=1` debug overlay
 
-> 傾きの左右・前後の対応(どちらに傾けるとどちら向きに反応するか)は実機で確認済みです(`ROLL_SIGN=-1`/`PITCH_SIGN=+1`)。別端末で感覚が逆に感じる場合は `web/src/sim/tiltInput.ts` のこれらの定数を反転してください。
+> The left/right and front/back tilt mapping (which way you tilt vs. which way it responds) has been verified on a real device (`ROLL_SIGN=-1`/`PITCH_SIGN=+1`). If it feels reversed on a different device, flip these constants in `web/src/sim/tiltInput.ts`.
 
-インストール可能なアプリ(APK)として配布する場合は [Capacitor](https://capacitorjs.com/) で既存のビルドをラップします。Android SDK(build-tools・platform-tools)と `ANDROID_HOME` の設定が必要です。
+To package it as an installable app (APK), [Capacitor](https://capacitorjs.com/) wraps the existing web build. This requires the Android SDK (build-tools, platform-tools) and `ANDROID_HOME` to be set up.
 
 ```bash
 cd web
@@ -86,31 +88,31 @@ cd android
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`web/android/` はCapacitorが生成するネイティブプロジェクトです。ビルド成果物・署名鍵(`*.keystore`/`*.jks`)・`local.properties` はGit管理外です。デバッグビルドのみを対象とし、ストア公開用の署名は対象外です。
+`web/android/` is the native project generated by Capacitor. Build output, signing keys (`*.keystore`/`*.jks`), and `local.properties` are not tracked in git. Only debug builds are supported; store-signed release builds are out of scope.
 
-## 配布
+## Distribution
 
-Play Store配布は行いません。GitHub標準機能(Actions/Pages/Releases)のみで配布します。
+There's no Play Store release — distribution relies only on standard GitHub features (Actions/Pages/Releases).
 
-- **PC/ブラウザ版**: `main` ブランチへのpushで GitHub Actions (`.github/workflows/pages.yml`) が自動でビルド・デプロイします。公開には初回のみリポジトリの Settings → Pages → Source を「GitHub Actions」に切り替える設定が必要です
-- **Android版(APK)**: `v*` 形式のタグをpushすると GitHub Actions (`.github/workflows/android-apk.yml`) が未署名のデバッグAPKをビルドし、そのタグの GitHub Release にアセットとして添付します。ストア経由ではないため、インストール時に端末で「提供元不明のアプリ」の許可が必要です
+- **Desktop/browser**: pushing to `main` triggers GitHub Actions (`.github/workflows/pages.yml`), which builds and deploys automatically to GitHub Pages. Publishing requires a one-time repository setting: **Settings → Pages → Source → "GitHub Actions"**. Note that GitHub Pages for a *private* repository needs a paid plan (GitHub Pro/Team/Enterprise) — on the Free plan, the repository needs to be public for Pages to serve it.
+- **Android (APK)**: pushing a tag matching `v*` triggers GitHub Actions (`.github/workflows/android-apk.yml`), which builds an unsigned debug APK and attaches it to that tag's GitHub Release. Since it isn't distributed through a store, installing it requires allowing "install from unknown sources" on the device.
 
-詳細は `02_design.md` 6.17 章を参照してください。
+See `02_design.md` section 6.17 for details.
 
-### コースの切り替え
+### Switching courses
 
-画面左下の「course」ドロップダウンから、または URL に `?course=<id>` を付けることで読み込むコースを切り替えられます(既定 `monaco`)。
+Use the "course" dropdown at the bottom left, or append `?course=<id>` to the URL (default `monaco`).
 
-| コース | `id` |
+| Course | `id` |
 |---|---|
-| モナコ | `monaco` |
-| 鈴鹿 | `suzuka` |
+| Monaco | `monaco` |
+| Suzuka | `suzuka` |
 
-例: http://localhost:5173/?course=suzuka
+Example: `http://localhost:5173/?course=suzuka`
 
-## コースデータの再生成
+## Regenerating course data
 
-同梱の `web/public/course/monaco.json` / `web/public/course/suzuka.json` は FastF1 の決勝データから生成済みです。再生成する場合:
+The bundled `web/public/course/monaco.json` / `web/public/course/suzuka.json` were generated from each race's FastF1 data. To regenerate them:
 
 ```bash
 cd tools
@@ -118,60 +120,60 @@ uv run gradient-circuit generate --circuit monaco --out ../web/public/course/mon
 uv run gradient-circuit generate --circuit suzuka --sg-window-narrow 9 --out ../web/public/course/suzuka.json
 ```
 
-- `--circuit`(既定 `monaco`)でコースを選択します。コースごとの設定(FastF1 のイベント名、受け入れ基準の目標値、道幅クランプ範囲)は `tools/src/gradient_circuit/circuits.py` にまとめてあります。
-- 鈴鹿は `--sg-window-narrow 9` が必須です(シケインが大回りになる問題への対策。モナコには適用しないでください -- 基準ライン自身の閉合継ぎ目付近が破綻します。詳細は `02_design.md` 4.4 章)。
-- セッションは既定で自動選択されます(現在年から遡り、位置データが取得できる最新の決勝)。`--year 2026` のように明示指定も可能です。
-- 初回実行時は FastF1 が API からデータを取得するため数分かかります。取得結果は `tools/.fastf1cache/`(Git 管理外)にキャッシュされます。
-- 実行後、コースデータが受け入れ基準(全長・標高差・全幅・ループ閉合誤差・曲率の連続性・欠損値なし・サンプル配列長の整合性・参照速度の到達可能性)を満たすか自動検証し、結果をコンソールに出力します。具体的な目標値はコースごとに異なり(モナコ: 全長3337m±3%・標高差40m±15%・全幅8〜12m、鈴鹿: 全長5807m±3%・標高差40m±15%・全幅10〜16m)、`circuits.py` を参照してください。
-- コース生成時、そのセッションの最速クリーンラップの速度を実テレメトリから抽出し、`reference` ブロックとして `course/<id>.json` に格納します(Autoモードの目標速度、上記参照)。グリップ限界に対して到達不可能な区間が多い場合(既定で20%超)は、より遅いクリーンラップへ自動的にフォールバックします。詳細は `02_design.md` 4.8 章を参照してください。
+- `--circuit` (default `monaco`) selects the course. Per-course settings (the FastF1 event name, acceptance-criteria targets, track-width clamp range) live in `tools/src/gradient_circuit/circuits.py`.
+- Suzuka requires `--sg-window-narrow 9` (works around the chicanes being smoothed into too-wide a curve; don't apply it to Monaco — it breaks the closure seam near the reference line's own start/end. See `02_design.md` section 4.4 for details).
+- The session is auto-selected by default (the most recent race with available position data, searching backward from the current year). You can specify one explicitly, e.g. `--year 2026`.
+- The first run takes a few minutes since FastF1 fetches data from its API. Fetched data is cached under `tools/.fastf1cache/` (not tracked in git).
+- After generation, the course data is automatically checked against acceptance criteria (total length, elevation range, overall width, loop-closure error, curvature continuity, no missing values, consistent sample-array lengths, reference-speed reachability), and the results are printed to the console. Target values differ per course (Monaco: length 3337 m ±3%, elevation range 40 m ±15%, width 8–12 m; Suzuka: length 5807 m ±3%, elevation range 40 m ±15%, width 10–16 m) — see `circuits.py` for specifics.
+- During generation, the fastest clean lap's speed from real telemetry for that session is extracted and stored as a `reference` block in `course/<id>.json` (used for the Auto mode target speed above). If too many segments are unreachable given the grip limit (more than 20% by default), it automatically falls back to a slower clean lap. See `02_design.md` section 4.8 for details.
 
-### テスト
+### Tests
 
 ```bash
 cd tools
 uv run pytest
 ```
 
-FastF1 への通信を伴わない、幾何計算(曲率符号・弧長リサンプル・道幅クランプ・受け入れ基準判定・グリップモデルのフィット・参照速度プロファイル・ギア/回転数のフィット)のユニットテストです。
+These are unit tests for geometry calculations (curvature sign, arc-length resampling, track-width clamping, acceptance-criteria checks, grip-model fitting, reference speed profiles, gear/RPM fitting) that don't require network access to FastF1.
 
-## 車両グリップモデルの実測フィット
+## Real-telemetry fit for the vehicle grip model
 
-シミュレータの車両モデル(`web/src/sim/vehicleParams.ts`)が使うコーナリンググリップ限界は、定数ではなく実テレメトリからのフィット値です。速度依存(`a = min(a0 + k * v^2, a_cap)`、ダウンフォースの増加とタイヤ荷重感度による頭打ちを表す)で、コースデータ生成とは別のサブコマンドで測定します。
+The cornering grip limit used by the simulator's vehicle model (`web/src/sim/vehicleParams.ts`) isn't a hand-picked constant — it's fit from real telemetry. It's speed-dependent (`a = min(a0 + k * v^2, a_cap)`, representing increasing downforce with a tire-load-sensitivity cap), and measured via a separate subcommand from course data generation.
 
 ```bash
 cd tools
 uv run gradient-circuit fit-grip
 ```
 
-- 対象コースの `course/<id>.json`(先に `generate` で生成済みであること)へ、全クリーンラップの実速度を投影し、速度ビンごとの p95 包絡線に最小二乗フィットします。
-- コースは既定で `circuits.py` の全コースを対象にします。`--circuit` で絞り込み可能です。
-- 出力される `mechLateralAccel` / `aeroLateralCoeff` / `maxLateralAccelCap` を `web/src/sim/vehicleParams.ts` に反映します。
-- 実測結果と手法の詳細は `02_design.md` 4.9 章を参照してください。
+- Projects every clean lap's real speed onto the target course's `course/<id>.json` (must already be generated), then fits a least-squares curve to the p95 envelope per speed bin.
+- Targets every course in `circuits.py` by default; narrow it with `--circuit`.
+- The resulting `mechLateralAccel` / `aeroLateralCoeff` / `maxLateralAccelCap` values are applied to `web/src/sim/vehicleParams.ts`.
+- See `02_design.md` section 4.9 for measurement results and methodology.
 
-## ギア・エンジン回転数の実測フィット
+## Real-telemetry fit for gear/RPM
 
-シミュレータのギア段・エンジン回転数(表示・音専用、`web/src/sim/vehicleParams.ts` の `DEFAULT_SHIFT_PARAMS`)も、推測ではなく実テレメトリ(FastF1 の `nGear`/`RPM` チャンネル)からのフィット値です。グリップモデルと同様、コースデータ生成とは別のサブコマンドで測定します。
+The simulator's gear and engine RPM (display/sound only, `DEFAULT_SHIFT_PARAMS` in `web/src/sim/vehicleParams.ts`) are likewise fit from real telemetry (FastF1's `nGear`/`RPM` channels) rather than guessed. As with the grip model, this is measured via a separate subcommand from course data generation.
 
 ```bash
 cd tools
 uv run gradient-circuit fit-shift
 ```
 
-- 対象コースの全クリーンラップの `nGear`/`RPM`/`Speed` をプールし、ギアごとの RPM~速度の線形フィットと、ギア境界ごとのシフトアップ/ダウン速度(実測の中央値)を算出します。コース位置への投影は行いません(ギア/回転数は車両側の特性で、コースの `s` に依存しないため)。
-- コースは既定で `circuits.py` の全コースを対象にします。`--circuit` で絞り込み可能です。
-- 出力される `gearCount` / `idleRpm` / `redlineRpm` / `shiftUpSpeeds` / `shiftDownSpeeds` / `gearRpmCoeffs` を `web/src/sim/vehicleParams.ts` に反映します。
-- 実測結果と手法の詳細は `02_design.md` 4.10/6.16 章を参照してください。
+- Pools `nGear`/`RPM`/`Speed` across every clean lap, fits a linear RPM-vs-speed relationship per gear, and computes shift-up/down speeds per gear boundary (the measured median). Course position isn't a factor here, since gear/RPM are vehicle characteristics independent of course position `s`.
+- Targets every course in `circuits.py` by default; narrow it with `--circuit`.
+- The resulting `gearCount` / `idleRpm` / `redlineRpm` / `shiftUpSpeeds` / `shiftDownSpeeds` / `gearRpmCoeffs` values are applied to `web/src/sim/vehicleParams.ts`.
+- See `02_design.md` sections 4.10/6.16 for measurement results and methodology.
 
-## 別エンジンへの移植について
+## Porting to another engine
 
-`web/public/course/*.json`(モナコ・鈴鹿とも)は Three.js に固有の情報を一切含まない、エンジン非依存の中間形式(`gradient-circuit/course@2`)です。座標は Z 上・右手系(Three.js の Y 上への変換は `web/src/course/loader.ts` が担当)。この JSON をそのまま読み込めば、Unity など別エンジンでも同じコースデータを利用できます。
+`web/public/course/*.json` (both Monaco and Suzuka) is an engine-agnostic intermediate format (`gradient-circuit/course@2`) that contains nothing Three.js-specific. Coordinates are right-handed with Z up (conversion to Three.js's Y-up is handled by `web/src/course/loader.ts`). Any engine — Unity, for example — can load this JSON directly and use the same course data.
 
-| 再実装が必要 | そのまま流用可 |
+| Needs reimplementing | Reusable as-is |
 |---|---|
-| `web/src/render/*`(Three.js 固有の描画) | `web/public/course/*.json`(データそのもの) |
-| `web/src/ui/*`(DOM 固有の HUD/操作) | `web/src/sim/track.ts` / `sim/vehicle.ts` のアルゴリズム(純粋な数式のみ、`three` 非依存。ESLint で機械的に強制) |
-| `web/src/camera/*Rig`(カメラ API 固有) | `web/src/camera/types.ts` のインタフェース定義 |
+| `web/src/render/*` (Three.js-specific rendering) | `web/public/course/*.json` (the data itself) |
+| `web/src/ui/*` (DOM-specific HUD/controls) | The algorithms in `web/src/sim/track.ts` / `sim/vehicle.ts` (pure math, no `three` dependency — enforced mechanically by ESLint) |
+| `web/src/camera/*Rig` (camera-API-specific) | The interface definitions in `web/src/camera/types.ts` |
 
-## ライセンス
+## License
 
-準備中。
+TBD.
