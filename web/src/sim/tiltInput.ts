@@ -8,6 +8,10 @@
  *
  * DOM-only (DeviceOrientationEvent, ScreenOrientation, localStorage) -- no
  * `three` import, like sim/input.ts.
+ *
+ * iOS Safari requires an explicit, user-gesture-triggered permission
+ * request before it fires `deviceorientation` at all -- see
+ * `TiltSensor.requestPermissionIfNeeded()` and design 6.15.7.
  */
 
 import type { AxisSource, BipolarAxisSource } from "./input";
@@ -66,6 +70,20 @@ function clamp(value: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, value));
 }
 
+// iOS Safari (13+) doesn't expose this in the standard DOM lib types --
+// it's a WebKit-specific static method, feature-detected below (design
+// 6.15.7).
+interface IOSDeviceOrientationEventStatic {
+  requestPermission: () => Promise<"granted" | "denied">;
+}
+
+function permissionRequestRequired(): boolean {
+  return (
+    typeof (DeviceOrientationEvent as unknown as Partial<IOSDeviceOrientationEventStatic>).requestPermission ===
+    "function"
+  );
+}
+
 const CALIBRATION_STORAGE_KEY = "gradient-circuit:tiltCalibration";
 
 interface Calibration {
@@ -111,7 +129,30 @@ export class TiltSensor {
       this.refRoll = saved.roll;
       this.refPitch = saved.pitch;
     }
-    window.addEventListener("deviceorientation", this.handleOrientation);
+    // iOS Safari gates deviceorientation behind requestPermissionIfNeeded()
+    // below (design 6.15.7); everywhere else (Android, desktop) it's safe
+    // to subscribe immediately, same as before this fix.
+    if (!permissionRequestRequired()) {
+      window.addEventListener("deviceorientation", this.handleOrientation);
+    }
+  }
+
+  /**
+   * Must be called from inside a real user-gesture event handler (e.g. the
+   * first touchstart) -- iOS Safari rejects requestPermission() otherwise.
+   * No-ops and returns "granted" on platforms that don't require this
+   * (Android, desktop, older iOS), so callers don't need to branch on
+   * platform themselves (design 6.15.7).
+   */
+  async requestPermissionIfNeeded(): Promise<"granted" | "denied"> {
+    if (!permissionRequestRequired()) return "granted";
+    const result = await (
+      DeviceOrientationEvent as unknown as IOSDeviceOrientationEventStatic
+    ).requestPermission();
+    if (result === "granted") {
+      window.addEventListener("deviceorientation", this.handleOrientation);
+    }
+    return result;
   }
 
   /** Degrees from the calibrated neutral, positive = steer left (see module doc for sign convention). */

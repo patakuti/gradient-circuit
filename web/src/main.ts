@@ -37,6 +37,7 @@ import {
 } from "./sim/input";
 import { TiltSensor, TiltSteerAxis, TiltThrottleAxis, TiltBrakeAxis } from "./sim/tiltInput";
 import { createTouchPedals, type TouchPedals } from "./ui/touchPedals";
+import { showTiltPermissionDeniedNotice } from "./ui/tiltPermissionNotice";
 import { normalize, cross, rotateAroundAxis } from "./sim/vec";
 import { CameraManager } from "./camera/manager";
 import { ChaseRig } from "./camera/chaseRig";
@@ -431,6 +432,24 @@ async function main() {
   // or, on Android where there's no keyboard, the first touch.
   window.addEventListener("keydown", () => engineAudio.start(), { once: true });
   window.addEventListener("touchstart", () => engineAudio.start(), { once: true, passive: true });
+
+  // iOS Safari (design 6.15.7): requestPermission() must be called from
+  // inside a real user-gesture handler, so it rides the same first-touch
+  // hook as engineAudio.start() above. A no-op returning "granted" on
+  // Android/desktop/older iOS, so this is safe to always register when
+  // touch-primary.
+  if (IS_TOUCH_PRIMARY && tiltSensor) {
+    const sensor = tiltSensor;
+    window.addEventListener(
+      "touchstart",
+      () => {
+        void sensor.requestPermissionIfNeeded().then((result) => {
+          if (result === "denied") showTiltPermissionDeniedNotice(document.body);
+        });
+      },
+      { once: true, passive: true },
+    );
+  }
 
   let tPrev = performance.now();
   let accumulator = 0;
