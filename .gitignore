@@ -17,3 +17,6 @@ web/*.tsbuildinfo
 .claude/
 .pytest_cache/
 *.egg-info/
+
+*.jks
+*.keystore

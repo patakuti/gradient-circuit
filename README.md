@@ -2,6 +2,8 @@
 
 A minimal driving simulator that reproduces real F1 circuits (Monaco GP, Suzuka) — including elevation — and lets you drive laps around them in your browser.
 
+> **Disclaimer**: Gradient Circuit is an unofficial, fan-made project and is not affiliated with, endorsed by, or associated in any way with Formula 1, FIA, or Formula One Licensing B.V. F1, FORMULA 1, FIA FORMULA ONE WORLD CHAMPIONSHIP, and related marks are trademarks of Formula One Licensing B.V. Course and reference-speed data are derived from public FIA/Formula 1 timing data via [FastF1](https://github.com/theOehrly/Fast-F1) and are used here only as a summarized/derived pacing reference for gameplay — not to identify or represent any individual driver.
+
 ## Overview
 
 - Generates circuit course data (centerline, track width, elevation, curvature) from FastF1 telemetry. Monaco and Suzuka are supported.
