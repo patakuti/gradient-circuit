@@ -393,6 +393,10 @@ async function main() {
         onReset: doReset,
         onMenuToggle: (open) => {
           paused = open;
+          // The settings panel (ui/controls.ts) is vertically centered on
+          // the right and would otherwise sit on top of the top-right
+          // gauges (P19 follow-up, found via emulator screenshot).
+          gauges.setVisible(!open);
         },
       }
     : null;
