@@ -54,6 +54,34 @@ function clampByte(v: number): number {
 }
 
 /**
+ * Race-number decal for the car's nose sides (design 6.8.1) -- a plain
+ * white disc with a dark numeral, not any real team's number-plate style.
+ */
+export function createNumberDecalTexture(digits: string): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = TEXTURE_SIZE;
+  canvas.height = TEXTURE_SIZE;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("2D canvas context unavailable");
+
+  ctx.clearRect(0, 0, TEXTURE_SIZE, TEXTURE_SIZE);
+  ctx.fillStyle = "#f2f2f2";
+  ctx.beginPath();
+  ctx.arc(TEXTURE_SIZE / 2, TEXTURE_SIZE / 2, TEXTURE_SIZE * 0.46, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "#1a1a1a";
+  ctx.font = `bold ${TEXTURE_SIZE * 0.55}px sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(digits, TEXTURE_SIZE / 2, TEXTURE_SIZE * 0.54);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+/**
  * Window-grid building facade, used by render/cityScenery.ts for Monaco's
  * skyline (design 6.12). A shared base texture is cloned per building so
  * each can set its own `.repeat` without affecting the others.
@@ -65,7 +93,18 @@ export function createWindowTexture(): THREE.CanvasTexture {
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("2D canvas context unavailable");
 
-  ctx.fillStyle = "#4a4a52";
+  // Background (design 6.12.1, P18 follow-up): was a medium blue-grey
+  // (#4a4a52) that, multiplied against `material.color` (MeshStandardMaterial
+  // combines `color` and `map` by multiplying them), neutralized whatever
+  // palette color a building was given -- the first palette attempt still
+  // rendered as a muddy grey-brown regardless of the actual color chosen,
+  // since this background plus the mostly-dark window cells below covered
+  // nearly the whole facade. Lightened further (from an intermediate
+  // #cfc6b0 stone tone to this near-white) for the second, paler
+  // white/beige-only palette (cityScenery.ts's BUILDING_PALETTE) -- the
+  // in-between stone tone still muddied the near-white wall colors when
+  // multiplied.
+  ctx.fillStyle = "#efe8da";
   ctx.fillRect(0, 0, TEXTURE_SIZE, TEXTURE_SIZE);
 
   const cols = 8;
@@ -76,7 +115,11 @@ export function createWindowTexture(): THREE.CanvasTexture {
   const marginH = cellH * 0.18;
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      ctx.fillStyle = Math.random() < 0.35 ? "#f2e6b0" : "#26262c";
+      // Unlit window color softened from near-black (#26262c) to a dark
+      // warm brown, for the same reason as the background above -- windows
+      // cover most of the facade area, so a near-black fill dominated the
+      // final look regardless of the wall color.
+      ctx.fillStyle = Math.random() < 0.35 ? "#f7e9b8" : "#4a4038";
       ctx.fillRect(c * cellW + marginW, r * cellH + marginH, cellW - marginW * 2, cellH - marginH * 2);
     }
   }

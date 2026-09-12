@@ -26,7 +26,17 @@ const BUILDING_MIN_DEPTH_M = 8;
 const BUILDING_MAX_DEPTH_M = 14;
 const BUILDING_TEXTURE_UNIT_M = 7; // meters per full window-grid tile
 
-const BUILDING_PALETTE = [0xd8c9a8, 0xc9b79a, 0xb8a488, 0xd9d4c4, 0xc4b8a0];
+// Monaco street-front palette (design 6.12.1, P18 follow-up): the first
+// version leaned into saturated ochre/terracotta/pink/blue-grey tones,
+// which read as more "generic Mediterranean village" than Monaco's actual
+// look -- dense white/cream high-rises and pale stone facades. Replaced
+// with a tighter palette of near-white and pale beige/stone tones only
+// (per user feedback: "もっと白、ベージュ系の淡い色がいい").
+const BUILDING_PALETTE = [
+  0xf7f3ea, 0xf5f0e6, 0xefe8d8, 0xf0ece0, 0xe8dfc8, 0xece4d0, 0xe3dbc6, 0xdcd2b8,
+];
+const ROOF_ACCENT_COLOR = 0xc9a888; // pale tan roof edge -- softened to match the paler wall palette above
+const ROOF_ACCENT_HEIGHT_M = 0.3;
 
 const TUNNEL_WALL_MARGIN_M = 1.0;
 const TUNNEL_CEILING_HEIGHT_M = 4.5;
@@ -111,6 +121,7 @@ function buildBuildings(
   group.name = "buildings";
   const rng = createRng(1);
   const windowTexture = createWindowTexture();
+  const roofAccentMaterial = new THREE.MeshStandardMaterial({ color: ROOF_ACCENT_COLOR, roughness: 0.8 });
 
   for (let s = 0; s < track.length; s += BUILDING_SPACING_M) {
     const sample = track.sampleAt(s);
@@ -147,6 +158,16 @@ function buildBuildings(
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), material);
       mesh.position.set(base.x, base.y + height / 2, base.z);
       group.add(mesh);
+
+      // Roof-edge accent (design 6.12.1): a slightly larger, thin box
+      // capping the roof, so the silhouette reads as a building with a
+      // rooftop rather than a plain unadorned box.
+      const roofAccent = new THREE.Mesh(
+        new THREE.BoxGeometry(width * 1.04, ROOF_ACCENT_HEIGHT_M, depth * 1.04),
+        roofAccentMaterial,
+      );
+      roofAccent.position.set(base.x, base.y + height + ROOF_ACCENT_HEIGHT_M / 2, base.z);
+      group.add(roofAccent);
     }
   }
   return group;
