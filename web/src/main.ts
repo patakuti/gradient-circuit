@@ -46,7 +46,6 @@ import { Hud } from "./ui/hud";
 import {
   createControls,
   type DriveModeOption,
-  type AssistStrengthOption,
   type ThrottleBrakeSchemeOption,
   type AndroidControlsConfig,
 } from "./ui/controls";
@@ -78,32 +77,39 @@ function moveToward(current: number, target: number, maxDelta: number): number {
   return current;
 }
 
-const DRIVE_MODE_OPTIONS: DriveModeOption[] = [
-  { id: "auto", label: "Auto" },
-  { id: "assist", label: "Assist" },
-  { id: "manual", label: "Manual" },
+// Mode + assist strength, unified into a single spectrum (design 6.14.6
+// follow-up): the old 3-mode select plus a separately-enabled 0-100% assist
+// select let you dial in "assist" at 0% or 100%, which duplicate "manual"
+// and "auto" respectively (0% is bit-for-bit the same input mix as manual;
+// 100% is *almost* the same as auto, short of auto's corner-approach
+// throttle cut -- see design 6.14.1a/6.14.6) without reading as such in the
+// UI. One control with five non-overlapping steps removes that redundancy.
+interface CombinedModeOption extends DriveModeOption {
+  mode: DriveMode;
+  strength: number; // meaningful only when mode === "assist"; carried for manual/auto too so callers need no special case
+}
+const COMBINED_MODE_OPTIONS: CombinedModeOption[] = [
+  { id: "manual", label: "Manual", mode: "manual", strength: 0 },
+  { id: "assist25", label: "Assist 25%", mode: "assist", strength: 0.25 },
+  { id: "assist50", label: "Assist 50%", mode: "assist", strength: 0.5 },
+  { id: "assist75", label: "Assist 75%", mode: "assist", strength: 0.75 },
+  { id: "auto", label: "Auto", mode: "auto", strength: 1 },
 ];
+const DEFAULT_COMBINED_MODE_ID = "auto"; // design 6.14.5 acceptance criterion #9: throttle-only lap on first launch
+function combinedModeOption(id: string): CombinedModeOption {
+  return COMBINED_MODE_OPTIONS.find((option) => option.id === id) ?? COMBINED_MODE_OPTIONS[COMBINED_MODE_OPTIONS.length - 1];
+}
 function driveModeLabel(mode: DriveMode): string {
   if (mode === "auto") return "Auto";
   if (mode === "assist") return "Assist";
   return "Manual";
 }
-// Cycle order for the [M] key (design 6.14.5).
-const DRIVE_MODE_CYCLE: DriveMode[] = ["auto", "assist", "manual"];
-function nextDriveMode(mode: DriveMode): DriveMode {
-  return DRIVE_MODE_CYCLE[(DRIVE_MODE_CYCLE.indexOf(mode) + 1) % DRIVE_MODE_CYCLE.length];
+// Cycle order for the [M] key (design 6.14.6): most- to least-automated,
+// same direction as the pre-unification auto -> assist -> manual cycle.
+const COMBINED_MODE_CYCLE = ["auto", "assist75", "assist50", "assist25", "manual"];
+function nextCombinedModeId(id: string): string {
+  return COMBINED_MODE_CYCLE[(COMBINED_MODE_CYCLE.indexOf(id) + 1) % COMBINED_MODE_CYCLE.length];
 }
-
-// Assist strength (design 6.14.1a, P12 follow-up): a setting, not a driving
-// input (design 4.2.2), so it's UI-only -- no keyboard binding.
-const ASSIST_STRENGTH_OPTIONS: AssistStrengthOption[] = [
-  { id: "0", label: "0%" },
-  { id: "0.25", label: "25%" },
-  { id: "0.5", label: "50%" },
-  { id: "0.75", label: "75%" },
-  { id: "1", label: "100%" },
-];
-const DEFAULT_ASSIST_STRENGTH_ID = "0.5";
 
 // Android input (design 6.15): `(pointer: coarse)` is the standard way to
 // detect a touch-primary device (unlike `"ontouchstart" in window`, which
@@ -153,22 +159,18 @@ function saveThrottleBrakeScheme(id: string): void {
   saveSetting(THROTTLE_BRAKE_SCHEME_STORAGE_KEY, id);
 }
 
+// Key kept from the pre-unification separate "driveMode" setting (design
+// 6.10 follow-up) -- same concern, now a single combined-mode id instead of
+// a bare DriveMode; a stale value from before this change (e.g. "assist")
+// just won't match any current id and falls back to the default, same as
+// any other unrecognized value.
 const DRIVE_MODE_STORAGE_KEY = "gradient-circuit:driveMode";
-function loadDriveMode(): DriveMode {
-  const saved = loadSetting(DRIVE_MODE_STORAGE_KEY, "auto");
-  return DRIVE_MODE_CYCLE.includes(saved as DriveMode) ? (saved as DriveMode) : "auto";
+function loadCombinedModeId(): string {
+  const saved = loadSetting(DRIVE_MODE_STORAGE_KEY, DEFAULT_COMBINED_MODE_ID);
+  return COMBINED_MODE_OPTIONS.some((option) => option.id === saved) ? saved : DEFAULT_COMBINED_MODE_ID;
 }
-function saveDriveMode(mode: DriveMode): void {
-  saveSetting(DRIVE_MODE_STORAGE_KEY, mode);
-}
-
-const ASSIST_STRENGTH_STORAGE_KEY = "gradient-circuit:assistStrength";
-function loadAssistStrengthId(): string {
-  const saved = loadSetting(ASSIST_STRENGTH_STORAGE_KEY, DEFAULT_ASSIST_STRENGTH_ID);
-  return ASSIST_STRENGTH_OPTIONS.some((option) => option.id === saved) ? saved : DEFAULT_ASSIST_STRENGTH_ID;
-}
-function saveAssistStrengthId(id: string): void {
-  saveSetting(ASSIST_STRENGTH_STORAGE_KEY, id);
+function saveCombinedModeId(id: string): void {
+  saveSetting(DRIVE_MODE_STORAGE_KEY, id);
 }
 
 const CAMERA_STORAGE_KEY = "gradient-circuit:camera";
@@ -289,22 +291,27 @@ async function main() {
   scene.add(vehicleMesh);
 
   let vehicle: VehicleState = { s: 0, speed: 0, lap: 0, lateralOffset: 0, yaw: 0, steer: 0 };
-  let driveMode: DriveMode = loadDriveMode(); // design 6.14.5 default is "auto"; persisted so a course change doesn't reset it
-  let assistStrength = Number(loadAssistStrengthId()); // design 6.14.1a, [0, 1]
+  // design 6.14.5/6.14.6 default is "auto"; persisted so a course change doesn't reset it
+  let combinedModeId = loadCombinedModeId();
+  let driveMode: DriveMode = combinedModeOption(combinedModeId).mode;
+  let assistStrength = combinedModeOption(combinedModeId).strength; // design 6.14.1a, [0, 1]
   let shapedSteer = 0; // driver-steer pre-ramp state ("manual"/"assist" only), see MANUAL_STEER_SHAPE_RATE above
   // design 6.15.6 follow-up: true while the Android settings menu is open.
   // Freezes the physics step and engine sound in animate() below -- desktop
   // never sets this (no menu button there, see ui/controls.ts).
   let paused = false;
 
-  // design 6.14.1a: entering "assist" or "manual" from "auto" seeds the
-  // driver-steer shaping state (below) at the car's current steer angle, so
-  // driver control picks up smoothly instead of snapping from whatever the
-  // auto assist last commanded.
-  function enterDriverSteeredMode(next: DriveMode) {
-    if (next !== "auto" && driveMode === "auto") shapedSteer = vehicle.steer;
-    driveMode = next;
-    saveDriveMode(next);
+  // design 6.14.1a/6.14.6: entering "assist" or "manual" from "auto" seeds
+  // the driver-steer shaping state (below) at the car's current steer
+  // angle, so driver control picks up smoothly instead of snapping from
+  // whatever the auto assist last commanded.
+  function enterCombinedMode(nextId: string) {
+    const next = combinedModeOption(nextId);
+    if (next.mode !== "auto" && driveMode === "auto") shapedSteer = vehicle.steer;
+    combinedModeId = nextId;
+    driveMode = next.mode;
+    assistStrength = next.strength;
+    saveCombinedModeId(nextId);
   }
 
   // design 6.3.6/6.15.3: shared by the `R` key (KeyTrigger below) and
@@ -387,11 +394,8 @@ async function main() {
       cameraManager.select(id);
       saveCameraId(id);
     },
-    DRIVE_MODE_OPTIONS,
-    (id) => {
-      const next = DRIVE_MODE_OPTIONS.find((option) => option.id === id)?.id as DriveMode | undefined;
-      if (next) enterDriverSteeredMode(next);
-    },
+    COMBINED_MODE_OPTIONS,
+    (id) => enterCombinedMode(id),
     COURSE_CATALOG,
     COURSE_ID,
     selectCourse,
@@ -400,15 +404,9 @@ async function main() {
       engineAudio.setMuted(muted);
       saveMuted(muted);
     },
-    ASSIST_STRENGTH_OPTIONS,
-    loadAssistStrengthId(),
-    (id) => {
-      assistStrength = Number(id);
-      saveAssistStrengthId(id);
-    },
     androidControls,
   );
-  controls.setActiveMode(driveMode); // syncs the dropdown + assist-select-disabled state with the persisted mode (design 6.10 follow-up)
+  controls.setActiveMode(combinedModeId); // syncs the dropdown with the persisted mode (design 6.10 follow-up)
   const hud = new Hud(document.body, DEBUG, course.meta.name, IS_TOUCH_PRIMARY);
 
   const modeTrigger = new KeyTrigger(MODE_KEYS);
@@ -452,8 +450,8 @@ async function main() {
     if (!paused) accumulator += frameDt;
 
     if (modeTrigger.consume()) {
-      enterDriverSteeredMode(nextDriveMode(driveMode));
-      controls.setActiveMode(driveMode);
+      enterCombinedMode(nextCombinedModeId(combinedModeId));
+      controls.setActiveMode(combinedModeId);
     }
     if (resetTrigger.consume()) doReset();
 

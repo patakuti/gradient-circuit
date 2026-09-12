@@ -21,12 +21,14 @@ export interface CameraOption {
   label: string;
 }
 
+/**
+ * A single entry in the unified mode/assist-strength select (design
+ * 6.14.6): "Manual" / "Assist 25%" / "Assist 50%" / "Assist 75%" / "Auto".
+ * This module only ever renders `id`/`label` -- what each id *means*
+ * (which `DriveMode` and assist strength it maps to) is main.ts's concern,
+ * kept out of this DOM-only layer like everywhere else in this file.
+ */
 export interface DriveModeOption {
-  id: string;
-  label: string;
-}
-
-export interface AssistStrengthOption {
   id: string;
   label: string;
 }
@@ -73,9 +75,6 @@ export function createControls(
   onCourseSelect: (id: string) => void,
   initialMuted: boolean,
   onMuteToggle: (muted: boolean) => void,
-  assistStrengthOptions: AssistStrengthOption[],
-  activeAssistStrengthId: string,
-  onAssistStrengthSelect: (id: string) => void,
   androidControls: AndroidControlsConfig | null,
 ): Controls {
   const root = document.createElement("div");
@@ -114,8 +113,10 @@ export function createControls(
   cameraRow.appendChild(select);
   root.appendChild(cameraRow);
 
-  // Drive mode: a live toggle like the camera select (not a navigation
-  // like course select), per design 6.14.5.
+  // Drive mode + assist strength, unified into one live toggle (design
+  // 6.14.6) like the camera select (not a navigation like course select).
+  // A dropdown is fine here despite design 6.5's keyboard-only rule for
+  // throttle/brake/steer -- this is a setting, not a driving input.
   const modeRow = document.createElement("label");
   modeRow.style.cssText = "display:flex;align-items:center;gap:8px;";
   modeRow.textContent = "mode";
@@ -126,33 +127,9 @@ export function createControls(
     el.textContent = option.label;
     modeSelect.appendChild(el);
   }
-  modeSelect.addEventListener("change", () => {
-    strengthSelect.disabled = modeSelect.value !== "assist";
-    onDriveModeSelect(modeSelect.value);
-  });
+  modeSelect.addEventListener("change", () => onDriveModeSelect(modeSelect.value));
   modeRow.appendChild(modeSelect);
   root.appendChild(modeRow);
-
-  // Assist strength (design 6.14.1a, P12 follow-up): a setting, not a
-  // driving input, so a dropdown is fine despite design 6.5's keyboard-only
-  // rule for throttle/brake/steer. Only meaningful in "assist" mode -- kept
-  // visible but disabled otherwise, mirroring how browsers grey out
-  // inapplicable settings rather than hiding them.
-  const strengthRow = document.createElement("label");
-  strengthRow.style.cssText = "display:flex;align-items:center;gap:8px;";
-  strengthRow.textContent = "assist";
-  const strengthSelect = document.createElement("select");
-  for (const option of assistStrengthOptions) {
-    const el = document.createElement("option");
-    el.value = option.id;
-    el.textContent = option.label;
-    if (option.id === activeAssistStrengthId) el.selected = true;
-    strengthSelect.appendChild(el);
-  }
-  strengthSelect.disabled = true; // main.ts's default drive mode is "auto" (design 6.14.5), not "assist"
-  strengthSelect.addEventListener("change", () => onAssistStrengthSelect(strengthSelect.value));
-  strengthRow.appendChild(strengthSelect);
-  root.appendChild(strengthRow);
 
   // Android input (design 6.15.3): only rendered on a touch-primary device
   // (androidControls is null otherwise), so this has no effect on desktop's
@@ -242,7 +219,6 @@ export function createControls(
     },
     setActiveMode(id: string) {
       if (modeSelect.value !== id) modeSelect.value = id;
-      strengthSelect.disabled = id !== "assist";
     },
   };
 }
