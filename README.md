@@ -186,6 +186,10 @@ uv run gradient-circuit fit-shift
 | `web/src/ui/*` (DOM-specific HUD/controls) | The algorithms in `web/src/sim/track.ts` / `sim/vehicle.ts` (pure math, no `three` dependency — enforced mechanically by ESLint) |
 | `web/src/camera/*Rig` (camera-API-specific) | The interface definitions in `web/src/camera/types.ts` |
 
+## About this project
+
+This tool was designed and implemented entirely by Claude. The human provided the idea. However, this isn't a one-shot output; the human shaped it through hands-on testing and iterative, detail-oriented feedback.
+
 ## License
 
 [MIT](LICENSE)
