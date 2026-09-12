@@ -56,7 +56,7 @@ def raw_half_widths(d_buckets: list[list[float]]) -> tuple[np.ndarray, np.ndarra
     return half_left, half_right, d_med
 
 
-def _moving_average_periodic(x: np.ndarray, window_m: int) -> np.ndarray:
+def moving_average_periodic(x: np.ndarray, window_m: int) -> np.ndarray:
     n = len(x)
     w = min(window_m, n if n % 2 == 1 else n - 1)
     if w < 3:
@@ -96,8 +96,8 @@ def apply_calibration(
         "full_clamp_rate": full_clamp_hits / n,
     }
 
-    left_smoothed = _moving_average_periodic(left_clamped, SMOOTH_WINDOW_M)
-    right_smoothed = _moving_average_periodic(right_clamped, SMOOTH_WINDOW_M)
+    left_smoothed = moving_average_periodic(left_clamped, SMOOTH_WINDOW_M)
+    right_smoothed = moving_average_periodic(right_clamped, SMOOTH_WINDOW_M)
 
     # Re-clamp after smoothing: the moving average of already-in-range
     # values stays in range mathematically, but floating-point summation

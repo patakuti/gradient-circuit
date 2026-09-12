@@ -1,6 +1,7 @@
-"""JSON export in the `gradient-circuit/course@1` intermediate format.
+"""JSON export in the `gradient-circuit/course@2` intermediate format.
 
-Design ref: 02_design.md section 5.1
+Design ref: 02_design.md section 5.1. `@1` -> `@2` (P15): added the
+`reference` block (design 4.8) with the fastest clean lap's speed profile.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-SCHEMA = "gradient-circuit/course@1"
+SCHEMA = "gradient-circuit/course@2"
 GENERATOR_VERSION = "0.1.0"
 
 
@@ -36,6 +37,11 @@ def build_course_document(
     bank: np.ndarray,
     length: float,
     ds: float,
+    reference_driver: str,
+    reference_lap_number: float,
+    reference_lap_time_s: float,
+    reference_coverage: float,
+    reference_speed: np.ndarray,
 ) -> dict:
     n = len(s)
     return {
@@ -53,6 +59,13 @@ def build_course_document(
             "scale": scale,
             "bank_source": bank_source,
             "width_calibration": {"k": width_k, "margin": width_margin},
+        },
+        "reference": {
+            "driver": reference_driver,
+            "lap_number": reference_lap_number,
+            "lap_time_s": reference_lap_time_s,
+            "coverage": reference_coverage,
+            "speed": reference_speed.tolist(),
         },
         "units": {"length": "m", "angle": "rad"},
         "axes": {"up": "z", "handedness": "right"},

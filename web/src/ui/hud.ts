@@ -35,7 +35,15 @@ export interface DebugData {
   lateralOffset: number; // [m] (design 6.9, P12)
   yawDeg: number; // [deg] (design 6.9, P12)
   gripExceeded: boolean; // design 6.9, P12
+  referenceSpeedKmh: number; // Infinity when the course has no reference block (design 6.9, P15)
+  targetSpeedKmh: number; // min(referenceSpeed, gripSpeed) at the car's current position (design 6.9, P15)
   fps: number;
+}
+
+/** `@1` courses (design 5.1) have no reference block, so referenceSpeed is
+ * Infinity everywhere (design 6.9) -- shown as "--" rather than "Infinity". */
+function formatMaybeInfiniteKmh(kmh: number): string {
+  return Number.isFinite(kmh) ? `${kmh.toFixed(0)} km/h` : "--";
 }
 
 function formatLapTime(seconds: number | null): string {
@@ -106,6 +114,8 @@ export class Hud {
         `width L/R: ${debug.widthLeft.toFixed(1)} / ${debug.widthRight.toFixed(1)} m\n` +
         `d: ${debug.lateralOffset.toFixed(2)} m  yaw: ${debug.yawDeg.toFixed(1)} deg  ` +
         `grip: ${debug.gripExceeded ? "EXCEEDED" : "ok"}\n` +
+        `reference: ${formatMaybeInfiniteKmh(debug.referenceSpeedKmh)}  ` +
+        `target: ${formatMaybeInfiniteKmh(debug.targetSpeedKmh)}\n` +
         `fps: ${debug.fps.toFixed(0)}`;
     }
   }

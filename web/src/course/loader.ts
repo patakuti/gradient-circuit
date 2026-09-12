@@ -7,8 +7,8 @@
  * section 3 on why sim/track.ts can safely consume this module's output).
  */
 
-import type { CourseData, CourseMeta } from "./types";
-import { COURSE_SCHEMA } from "./types";
+import type { CourseData, CourseMeta, CourseReference } from "./types";
+import { COURSE_SCHEMA, COURSE_SCHEMA_LEGACY_V1 } from "./types";
 import type { Vec3 } from "../sim/vec";
 import { vec3 } from "../sim/vec";
 
@@ -23,11 +23,17 @@ export interface CourseSample {
   curvature: number;
   grade: number;
   bank: number;
+  /** Reference lap speed [m/s] at this sample (design 4.8/6.14.3, P15).
+   * `Infinity` when the course has no `reference` block (`@1`, design 5.1
+   * backward compat) -- the autopilot's min() then falls through to the
+   * grip-limited speed unchanged. */
+  referenceSpeed: number;
 }
 
 /** Runtime-ready course: validated, axis-converted, easy to index. */
 export interface Course {
   meta: CourseMeta;
+  reference?: CourseReference;
   closed: boolean;
   length: number;
   ds: number;
@@ -44,8 +50,13 @@ export function toThreeAxes(x: number, y: number, z: number): Vec3 {
   return vec3(x, z, -y);
 }
 
-const VALID_SCHEMAS: ReadonlySet<string> = new Set([COURSE_SCHEMA]);
+const VALID_SCHEMAS: ReadonlySet<string> = new Set([COURSE_SCHEMA, COURSE_SCHEMA_LEGACY_V1]);
 const SPACING_TOLERANCE = 0.01; // design 5.2 invariant #3: within +-1%
+// design 5.2 invariant #8: a plausible reference-speed range. 10 m/s
+// (36 km/h) floors out pit-lane-speed artifacts; 120 m/s (432 km/h) is
+// comfortably above any F1 top speed ever recorded.
+const REFERENCE_SPEED_MIN = 10;
+const REFERENCE_SPEED_MAX = 120;
 
 /** Validate the invariants from design 5.2. Throws CourseLoadError on violation. */
 function validate(doc: CourseData): void {
@@ -103,12 +114,33 @@ function validate(doc: CourseData): void {
       throw new CourseLoadError(`Non-positive width at index ${i}`);
     }
   }
+
+  if (doc.reference) {
+    const speed = doc.reference.speed;
+    if (speed.length !== doc.count) {
+      throw new CourseLoadError(
+        `reference.speed has length ${speed.length}, expected count=${doc.count}`,
+      );
+    }
+    for (let i = 0; i < speed.length; i++) {
+      const v = speed[i];
+      if (!Number.isFinite(v) || v <= 0) {
+        throw new CourseLoadError(`reference.speed contains a non-finite/non-positive value at index ${i}`);
+      }
+      if (v < REFERENCE_SPEED_MIN || v > REFERENCE_SPEED_MAX) {
+        throw new CourseLoadError(
+          `reference.speed[${i}]=${v} outside plausible range [${REFERENCE_SPEED_MIN}, ${REFERENCE_SPEED_MAX}] m/s`,
+        );
+      }
+    }
+  }
 }
 
 /** Parse and validate a CourseData object already in memory (e.g. for tests). */
 export function parseCourse(doc: CourseData): Course {
   validate(doc);
   const { s, x, y, z, widthLeft, widthRight, curvature, grade, bank } = doc.samples;
+  const referenceSpeed = doc.reference?.speed;
   const samples: CourseSample[] = new Array(doc.count);
   for (let i = 0; i < doc.count; i++) {
     samples[i] = {
@@ -119,10 +151,12 @@ export function parseCourse(doc: CourseData): Course {
       curvature: curvature[i],
       grade: grade[i],
       bank: bank[i],
+      referenceSpeed: referenceSpeed ? referenceSpeed[i] : Infinity,
     };
   }
   return {
     meta: doc.meta,
+    reference: doc.reference,
     closed: doc.closed,
     length: doc.length,
     ds: doc.ds,

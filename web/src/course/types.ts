@@ -1,13 +1,17 @@
 /**
  * Intermediate course-data format types.
  *
- * Design ref: 02_design.md section 5.1 (schema `gradient-circuit/course@1`).
+ * Design ref: 02_design.md section 5.1 (schema `gradient-circuit/course@2`).
  * This file is the JS/TS side of the layer contract between the Python
  * generator (tools/) and the simulator: it must stay a 1:1 mirror of the
  * JSON schema, with no Three.js or DOM types.
  */
 
-export const COURSE_SCHEMA = "gradient-circuit/course@1" as const;
+export const COURSE_SCHEMA = "gradient-circuit/course@2" as const;
+/** `@1` predates the `reference` block (P15) but is otherwise identical;
+ * the loader still accepts it (design 5.1/P15.2) with referenceSpeed
+ * falling back to Infinity. */
+export const COURSE_SCHEMA_LEGACY_V1 = "gradient-circuit/course@1" as const;
 
 export interface CourseMeta {
   name: string;
@@ -45,10 +49,23 @@ export interface CourseSamples {
   bank: number[];
 }
 
+/** Reference lap speed profile (design 4.8, requirement 3.6). Absent in
+ * `@1` documents. */
+export interface CourseReference {
+  driver: string;
+  lap_number: number;
+  lap_time_s: number;
+  /** Fraction of samples with a real (non-interpolated) telemetry point. */
+  coverage: number;
+  /** Reference speed [m/s] at each sample, length = count. */
+  speed: number[];
+}
+
 /** Raw shape of course/*.json, exactly as written by tools/export.py. */
 export interface CourseData {
   schema: string;
   meta: CourseMeta;
+  reference?: CourseReference;
   units: { length: string; angle: string };
   axes: { up: string; handedness: string };
   closed: boolean;
