@@ -88,6 +88,15 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 `web/android/` はCapacitorが生成するネイティブプロジェクトです。ビルド成果物・署名鍵(`*.keystore`/`*.jks`)・`local.properties` はGit管理外です。デバッグビルドのみを対象とし、ストア公開用の署名は対象外です。
 
+## 配布
+
+Play Store配布は行いません。GitHub標準機能(Actions/Pages/Releases)のみで配布します。
+
+- **PC/ブラウザ版**: `main` ブランチへのpushで GitHub Actions (`.github/workflows/pages.yml`) が自動でビルド・デプロイします。公開には初回のみリポジトリの Settings → Pages → Source を「GitHub Actions」に切り替える設定が必要です
+- **Android版(APK)**: `v*` 形式のタグをpushすると GitHub Actions (`.github/workflows/android-apk.yml`) が未署名のデバッグAPKをビルドし、そのタグの GitHub Release にアセットとして添付します。ストア経由ではないため、インストール時に端末で「提供元不明のアプリ」の許可が必要です
+
+詳細は `02_design.md` 6.17 章を参照してください。
+
 ### コースの切り替え
 
 画面左下の「course」ドロップダウンから、または URL に `?course=<id>` を付けることで読み込むコースを切り替えられます(既定 `monaco`)。

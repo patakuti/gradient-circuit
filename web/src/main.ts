@@ -199,7 +199,10 @@ const DEBUG = new URLSearchParams(window.location.search).get("debug") === "1";
 // design 6.10: `?course=<id>` picks which course/<id>.json to load, same
 // query-parameter convention as `?debug=1`.
 const COURSE_ID = new URLSearchParams(window.location.search).get("course") ?? DEFAULT_COURSE_ID;
-const COURSE_URL = `/course/${COURSE_ID}.json`;
+// Relative (no leading "/") so it resolves correctly whether the app is
+// served from the domain root (dev, Capacitor) or a subpath (a GitHub
+// Pages project page, e.g. /gradient-circuit/) -- P20, verified below.
+const COURSE_URL = `course/${COURSE_ID}.json`;
 
 function selectCourse(id: string): void {
   const params = new URLSearchParams(window.location.search);
