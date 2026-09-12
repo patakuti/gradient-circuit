@@ -13,6 +13,7 @@
 
 export interface HudData {
   speedKmh: number;
+  gear: number; // sim/shiftModel.ts's updateGear() result (design 6.16, P17)
   throttlePercent: number;
   brakePercent: number;
   steerPercent: number; // [-100, 100], positive = left (design 6.9, P12)
@@ -90,12 +91,12 @@ export class Hud {
 
   update(data: HudData, debug?: DebugData): void {
     this.mainLines.textContent = this.minimal
-      ? `speed: ${data.speedKmh.toFixed(0)} km/h\n` +
+      ? `speed: ${data.speedKmh.toFixed(0)} km/h  gear: ${data.gear}\n` +
         `lap: ${data.lap}  last: ${formatLapTime(data.lastLapTimeS)}\n` +
         `mode: ${data.driveModeLabel}${
           data.assistStrengthPercent !== null ? ` (${data.assistStrengthPercent.toFixed(0)}%)` : ""
         }`
-      : `speed: ${data.speedKmh.toFixed(0)} km/h\n` +
+      : `speed: ${data.speedKmh.toFixed(0)} km/h  gear: ${data.gear}\n` +
         `throttle: ${data.throttlePercent.toFixed(0)}%  brake: ${data.brakePercent.toFixed(0)}%  ` +
         `steer: ${data.steerPercent >= 0 ? "L" : "R"}${Math.abs(data.steerPercent).toFixed(0)}%\n` +
         `elevation: ${data.elevationM.toFixed(1)} m\n` +

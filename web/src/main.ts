@@ -18,7 +18,8 @@ import { setupEnvironment } from "./render/environment";
 import { buildVehicleMesh } from "./render/vehicleMesh";
 import { buildScenery } from "./render/scenery";
 import { resetVehicle, stepVehicle, type VehicleInput, type VehicleState } from "./sim/vehicle";
-import { DEFAULT_VEHICLE_PARAMS } from "./sim/vehicleParams";
+import { DEFAULT_VEHICLE_PARAMS, DEFAULT_SHIFT_PARAMS } from "./sim/vehicleParams";
+import { updateGear, INITIAL_GEAR } from "./sim/shiftModel";
 import { computeAssist, cornerGripSpeed, type DriveMode } from "./sim/autopilot";
 import { surfaceAt, type SurfaceKind } from "./sim/surface";
 import {
@@ -43,6 +44,7 @@ import { CockpitRig } from "./camera/cockpitRig";
 import type { VehiclePose } from "./camera/types";
 import { EngineAudio } from "./audio/engine";
 import { Hud } from "./ui/hud";
+import { Gauges } from "./ui/gauges";
 import {
   createControls,
   type DriveModeOption,
@@ -319,6 +321,10 @@ async function main() {
   function doReset() {
     vehicle = resetVehicle(vehicle); // keeps s/lap, zeroes the rest
     shapedSteer = 0;
+    // design 6.16: snap straight to 1st rather than letting updateGear()
+    // cascade down one gear per frame from whatever it was before the
+    // reset (it only ever moves by one gear per call).
+    currentGear = INITIAL_GEAR;
   }
 
   // onChange persists the driver's viewpoint from wherever it changes --
@@ -409,6 +415,7 @@ async function main() {
   );
   controls.setActiveMode(combinedModeId); // syncs the dropdown with the persisted mode (design 6.10 follow-up)
   const hud = new Hud(document.body, DEBUG, course.meta.name, IS_TOUCH_PRIMARY);
+  const gauges = new Gauges(document.body, IS_TOUCH_PRIMARY);
 
   const modeTrigger = new KeyTrigger(MODE_KEYS);
   const resetTrigger = new KeyTrigger(RESET_KEYS);
@@ -436,6 +443,9 @@ async function main() {
   // event from the physics step, so it -- not surface.kind -- is the right
   // signal for "currently at the wall".
   let lastWallContact = false;
+  // design 6.16/P17: updated once per frame (not per fixed physics step,
+  // design 6.4) since gear/RPM never feed back into physics.
+  let currentGear = INITIAL_GEAR;
 
   function animate() {
     requestAnimationFrame(animate);
@@ -529,12 +539,20 @@ async function main() {
     );
 
     const sample = track.sampleAt(vehicle.s);
-    // Paused: skip the engine/tire audio update too, so it freezes with the
-    // drive instead of still revving to whatever the driver's tilt/pedal
-    // happens to read while the menu covers them (design 6.15.6 follow-up).
+    // design 6.16/P17: frame-rate cadence, not the fixed physics step --
+    // gear/RPM never feed back into stepVehicle (requirement 4.9).
+    const shift = updateGear(currentGear, vehicle.speed, DEFAULT_SHIFT_PARAMS);
+    currentGear = shift.gear;
+    // Paused: skip the engine/tire audio and gauge updates too, so they
+    // freeze with the drive instead of still revving to whatever the
+    // driver's tilt/pedal happens to read while the menu covers them
+    // (design 6.15.6 follow-up).
     if (!paused) {
       engineAudio.update({
         speed: vehicle.speed,
+        rpm: shift.rpm,
+        idleRpm: DEFAULT_SHIFT_PARAMS.idleRpm,
+        redlineRpm: DEFAULT_SHIFT_PARAMS.redlineRpm,
         throttle: throttle.read(),
         brake: brake.read(),
         gripExceeded: lastGripExceeded,
@@ -542,10 +560,15 @@ async function main() {
         onGrass: lastSurfaceKind === "grass",
         wallContact: lastWallContact,
       });
+      gauges.update(
+        vehicle.speed * 3.6, shift.rpm, shift.gear,
+        DEFAULT_SHIFT_PARAMS.idleRpm, DEFAULT_SHIFT_PARAMS.redlineRpm,
+      );
     }
     hud.update(
       {
         speedKmh: vehicle.speed * 3.6,
+        gear: shift.gear,
         throttlePercent: throttle.read() * 100,
         brakePercent: brake.read() * 100,
         steerPercent: vehicle.steer * 100,
