@@ -1,0 +1,56 @@
+name: Build Android APK
+
+# Design ref: 02_design.md section 6.17.3. Builds an unsigned debug APK
+# (no Play Store distribution, no release signing -- design 6.17.3) and
+# attaches it to the pushed tag's GitHub Release.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build web app
+        working-directory: web
+        run: npm run build
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # `variables.gradle` targets compileSdk/targetSdk 36; explicitly
+      # installing it (rather than relying on whatever the runner image
+      # happens to preinstall) keeps this from silently breaking when the
+      # runner's bundled SDK version drifts, and auto-accepts licenses.
+      - uses: android-actions/setup-android@v3
+
+      - name: Sync Capacitor Android project
+        working-directory: web
+        run: npx cap sync android
+
+      - name: Build debug APK
+        working-directory: web/android
+        run: ./gradlew assembleDebug --console=plain
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: web/android/app/build/outputs/apk/debug/app-debug.apk
