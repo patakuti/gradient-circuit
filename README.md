@@ -2,6 +2,8 @@
 
 A minimal driving simulator that reproduces real F1 circuits (Monaco GP, Suzuka) — including elevation — and lets you drive laps around them in your browser.
 
+**[Play now](https://patakuti.github.io/gradient-circuit/)** — no install needed. On Android, you can also download the APK from the [Releases page](https://github.com/patakuti/gradient-circuit/releases) instead of building it yourself.
+
 > **Disclaimer**: Gradient Circuit is an unofficial, fan-made project and is not affiliated with, endorsed by, or associated in any way with Formula 1, FIA, or Formula One Licensing B.V. F1, FORMULA 1, FIA FORMULA ONE WORLD CHAMPIONSHIP, and related marks are trademarks of Formula One Licensing B.V. Course and reference-speed data are derived from public FIA/Formula 1 timing data via [FastF1](https://github.com/theOehrly/Fast-F1) and are used here only as a summarized/derived pacing reference for gameplay — not to identify or represent any individual driver.
 
 ## Overview
@@ -68,11 +70,11 @@ Press `C` to switch between the chase camera (following from behind) and the coc
 
 Engine, braking, and tire-scrub sounds (heard while pushing wide beyond the grip limit) play alongside curb/grass/barrier contact sounds — all procedurally generated with the Web Audio API, no external audio files. Due to browser autoplay restrictions, sound activates on your first key press. Mute it with the "mute" button at the bottom left.
 
-Gear (1st–8th) and engine RPM are derived automatically from your speed (there's no manual shifting). The gear/speed mapping and the shift-up/down thresholds were measured from real telemetry (FastF1's `nGear`/`RPM` channels). Engine pitch tracks RPM and dips at the instant of each upshift. A tachometer and speedometer are shown at the bottom right (the current gear also appears in the text HUD). See `02_design.md` sections 4.10/6.16 for details.
+Gear (1st–8th) and engine RPM are derived automatically from your speed (there's no manual shifting). The gear/speed mapping and the shift-up/down thresholds were measured from real telemetry (FastF1's `nGear`/`RPM` channels). Engine pitch tracks RPM and dips at the instant of each upshift. A tachometer and speedometer are shown at the bottom right (the current gear also appears in the text HUD).
 
-Cornering grip limits vary with speed (`min(a0 + k*v^2, a_cap)`). The coefficients weren't eyeballed — they come from a least-squares fit against real telemetry (all clean laps). See `02_design.md` section 4.9 for details and measurements.
+Cornering grip limits vary with speed (`min(a0 + k*v^2, a_cap)`). The coefficients weren't eyeballed — they come from a least-squares fit against real telemetry (all clean laps).
 
-In Auto mode, the target speed is the lesser of the course's fastest clean lap's real speed profile and the grip-limit speed above — the goal is to trace an actual driver's pace, based on reference speed data bundled in `course/*.json` rather than guesswork. Which driver/lap was used is shown in the `?debug=1` debug overlay (reference/target). See `02_design.md` sections 4.8/6.14.3 for details.
+In Auto mode, the target speed is the lesser of the course's fastest clean lap's real speed profile and the grip-limit speed above — the goal is to trace an actual driver's pace, based on reference speed data bundled in `course/*.json` rather than guesswork. Which driver/lap was used is shown in the `?debug=1` debug overlay (reference/target).
 
 Procedurally generated scenery (no external 3D assets) surrounds the track, styled to match each course's character: Monaco has buildings, a tunnel section, and a harbor section (water and yachts); Suzuka has curbs, grass, and trees. Monaco's buildings use a palette of pale tones (cream, ochre, terracotta, soft pink, etc.) evoking a Mediterranean streetscape, and Suzuka's trees mix broadleaf-style (rounded canopies) and conifer-style (cones).
 
@@ -88,6 +90,8 @@ Opening the app in a browser on a touch-primary device (e.g. a smartphone) switc
 - **HUD**: the top-left display is reduced to just speed / lap / mode. More detail (throttle/brake/steer %, elevation, surface type, etc.) is available in the settings panel or the `?debug=1` debug overlay
 
 > The left/right and front/back tilt mapping (which way you tilt vs. which way it responds) has been verified on a real device (`ROLL_SIGN=-1`/`PITCH_SIGN=+1`). If it feels reversed on a different device, flip these constants in `web/src/sim/tiltInput.ts`.
+
+A prebuilt APK is available from the **[Releases page](https://github.com/patakuti/gradient-circuit/releases)** — download and install it directly rather than building your own. The steps below are only needed if you want to build it yourself.
 
 To package it as an installable app (APK), [Capacitor](https://capacitorjs.com/) wraps the existing web build. This requires the Android SDK (build-tools, platform-tools) and `ANDROID_HOME` to be set up.
 
@@ -106,10 +110,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 There's no Play Store release — distribution relies only on standard GitHub features (Actions/Pages/Releases).
 
-- **Desktop/browser**: pushing to `main` triggers GitHub Actions (`.github/workflows/pages.yml`), which builds and deploys automatically to GitHub Pages. Publishing requires a one-time repository setting: **Settings → Pages → Source → "GitHub Actions"**. Note that GitHub Pages for a *private* repository needs a paid plan (GitHub Pro/Team/Enterprise) — on the Free plan, the repository needs to be public for Pages to serve it.
-- **Android (APK)**: pushing a tag matching `v*` triggers GitHub Actions (`.github/workflows/android-apk.yml`), which builds an unsigned debug APK and attaches it to that tag's GitHub Release. Since it isn't distributed through a store, installing it requires allowing "install from unknown sources" on the device.
-
-See `02_design.md` section 6.17 for details.
+- **Desktop/browser**: pushing to `main` triggers GitHub Actions (`.github/workflows/pages.yml`), which builds and deploys automatically to **[GitHub Pages](https://patakuti.github.io/gradient-circuit/)**. Publishing requires a one-time repository setting: **Settings → Pages → Source → "GitHub Actions"**. Note that GitHub Pages for a *private* repository needs a paid plan (GitHub Pro/Team/Enterprise) — on the Free plan, the repository needs to be public for Pages to serve it.
+- **Android (APK)**: pushing a tag matching `v*` triggers GitHub Actions (`.github/workflows/android-apk.yml`), which builds an unsigned debug APK and attaches it to that tag's **[GitHub Release](https://github.com/patakuti/gradient-circuit/releases)**. Since it isn't distributed through a store, installing it requires allowing "install from unknown sources" on the device.
 
 ### Switching courses
 
@@ -133,11 +135,11 @@ uv run gradient-circuit generate --circuit suzuka --sg-window-narrow 9 --out ../
 ```
 
 - `--circuit` (default `monaco`) selects the course. Per-course settings (the FastF1 event name, acceptance-criteria targets, track-width clamp range) live in `tools/src/gradient_circuit/circuits.py`.
-- Suzuka requires `--sg-window-narrow 9` (works around the chicanes being smoothed into too-wide a curve; don't apply it to Monaco — it breaks the closure seam near the reference line's own start/end. See `02_design.md` section 4.4 for details).
+- Suzuka requires `--sg-window-narrow 9` (works around the chicanes being smoothed into too-wide a curve; don't apply it to Monaco — it breaks the closure seam near the reference line's own start/end).
 - The session is auto-selected by default (the most recent race with available position data, searching backward from the current year). You can specify one explicitly, e.g. `--year 2026`.
 - The first run takes a few minutes since FastF1 fetches data from its API. Fetched data is cached under `tools/.fastf1cache/` (not tracked in git).
 - After generation, the course data is automatically checked against acceptance criteria (total length, elevation range, overall width, loop-closure error, curvature continuity, no missing values, consistent sample-array lengths, reference-speed reachability), and the results are printed to the console. Target values differ per course (Monaco: length 3337 m ±3%, elevation range 40 m ±15%, width 8–12 m; Suzuka: length 5807 m ±3%, elevation range 40 m ±15%, width 10–16 m) — see `circuits.py` for specifics.
-- During generation, the fastest clean lap's speed from real telemetry for that session is extracted and stored as a `reference` block in `course/<id>.json` (used for the Auto mode target speed above). If too many segments are unreachable given the grip limit (more than 20% by default), it automatically falls back to a slower clean lap. See `02_design.md` section 4.8 for details.
+- During generation, the fastest clean lap's speed from real telemetry for that session is extracted and stored as a `reference` block in `course/<id>.json` (used for the Auto mode target speed above). If too many segments are unreachable given the grip limit (more than 20% by default), it automatically falls back to a slower clean lap.
 
 ### Tests
 
@@ -160,7 +162,6 @@ uv run gradient-circuit fit-grip
 - Projects every clean lap's real speed onto the target course's `course/<id>.json` (must already be generated), then fits a least-squares curve to the p95 envelope per speed bin.
 - Targets every course in `circuits.py` by default; narrow it with `--circuit`.
 - The resulting `mechLateralAccel` / `aeroLateralCoeff` / `maxLateralAccelCap` values are applied to `web/src/sim/vehicleParams.ts`.
-- See `02_design.md` section 4.9 for measurement results and methodology.
 
 ## Real-telemetry fit for gear/RPM
 
@@ -174,7 +175,6 @@ uv run gradient-circuit fit-shift
 - Pools `nGear`/`RPM`/`Speed` across every clean lap, fits a linear RPM-vs-speed relationship per gear, and computes shift-up/down speeds per gear boundary (the measured median). Course position isn't a factor here, since gear/RPM are vehicle characteristics independent of course position `s`.
 - Targets every course in `circuits.py` by default; narrow it with `--circuit`.
 - The resulting `gearCount` / `idleRpm` / `redlineRpm` / `shiftUpSpeeds` / `shiftDownSpeeds` / `gearRpmCoeffs` values are applied to `web/src/sim/vehicleParams.ts`.
-- See `02_design.md` sections 4.10/6.16 for measurement results and methodology.
 
 ## Porting to another engine
 
