@@ -69,10 +69,8 @@ export function barrierOffsetAt(courseKind: CourseKind, sample: TrackSample, sid
 }
 
 /**
- * The surface at `lateralOffset` on `sample` (design 6.13.1). Treats the
- * vehicle as a point (no per-wheel surface split) -- requirement 4.7
- * doesn't ask for per-contact-patch behavior, and it would need a second
- * point sample every physics step for little benefit.
+ * The surface under a single point at `lateralOffset` on `sample`
+ * (design 6.13.1). wheelSurfaceAt() below calls this once per wheel side.
  */
 export function surfaceAt(courseKind: CourseKind, sample: TrackSample, lateralOffset: number): SurfaceQuery {
   const half = lateralOffset >= 0 ? sample.widthLeft : sample.widthRight;
@@ -94,4 +92,40 @@ export function surfaceAt(courseKind: CourseKind, sample: TrackSample, lateralOf
   // actually stops and slows the car, so there's no separate "wall grip"
   // to tune here.
   return { kind: "wall", gripFactor: 1, rollingFactor: 1, maxLateralOffset };
+}
+
+/** Both sides' surfaces plus the combined values stepVehicle needs (design 6.13.1, P23). */
+export interface WheelSurfaceQuery extends SurfaceState {
+  kind: SurfaceKind; // the worse of the two wheels (wall > grass > curb > asphalt), for the HUD
+  leftKind: SurfaceKind; // surface under the left-hand wheels (+d side)
+  rightKind: SurfaceKind; // surface under the right-hand wheels (-d side)
+}
+
+const SURFACE_SEVERITY: Record<SurfaceKind, number> = { asphalt: 0, curb: 1, grass: 2, wall: 3 };
+
+/**
+ * The surface under each side's wheels, judged separately (design 6.13.1,
+ * P23): a car straddling the road edge has one side on the curb/grass and
+ * the other still on asphalt. Grip/rolling are the mean of the two sides
+ * (each side carries half the load); the wall boundary stays the center
+ * point's own `maxLateralOffset`, since stepVehicle already offsets the
+ * wall stop by vehicleHalfWidth (design 6.3.5).
+ */
+export function wheelSurfaceAt(
+  courseKind: CourseKind,
+  sample: TrackSample,
+  lateralOffset: number,
+  wheelTrackHalf: number,
+): WheelSurfaceQuery {
+  const left = surfaceAt(courseKind, sample, lateralOffset + wheelTrackHalf);
+  const right = surfaceAt(courseKind, sample, lateralOffset - wheelTrackHalf);
+  const center = surfaceAt(courseKind, sample, lateralOffset);
+  return {
+    kind: SURFACE_SEVERITY[left.kind] >= SURFACE_SEVERITY[right.kind] ? left.kind : right.kind,
+    leftKind: left.kind,
+    rightKind: right.kind,
+    gripFactor: (left.gripFactor + right.gripFactor) / 2,
+    rollingFactor: (left.rollingFactor + right.rollingFactor) / 2,
+    maxLateralOffset: center.maxLateralOffset,
+  };
 }

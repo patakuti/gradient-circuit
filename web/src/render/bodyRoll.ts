@@ -18,14 +18,15 @@ const GRAVITY = 9.81; // [m/s^2] only converts lateral acceleration into g
 
 /**
  * @param lateralAccel [m/s^2], positive = left turn (sim/vehicle.ts's `lateralAccel`)
- * @param lateralOffset [m], positive = left of the centerline
- * @param onCurb whether the car is currently on a curb band
+ * @param leftOnCurb whether the left-hand wheels are on a curb band
+ * @param rightOnCurb whether the right-hand wheels are on a curb band
  */
-export function targetBodyRoll(lateralAccel: number, lateralOffset: number, onCurb: boolean): number {
+export function targetBodyRoll(lateralAccel: number, leftOnCurb: boolean, rightOnCurb: boolean): number {
   // Left turn (lateralAccel > 0) leans the body right = left side up = +roll.
   const rollG = ROLL_PER_G * (lateralAccel / GRAVITY);
-  // On a left curb (offset > 0) the left wheels ride up = left side up = +roll.
-  const rollCurb = onCurb ? Math.sign(lateralOffset) * CURB_ROLL : 0;
+  // Wheels riding up on a curb lift that side: left = +roll, right = -roll
+  // (both sides on curbs cancel out).
+  const rollCurb = ((leftOnCurb ? 1 : 0) - (rightOnCurb ? 1 : 0)) * CURB_ROLL;
   return Math.min(MAX_ROLL, Math.max(-MAX_ROLL, rollG + rollCurb));
 }
 

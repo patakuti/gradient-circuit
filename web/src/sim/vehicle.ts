@@ -37,6 +37,7 @@ export interface VehicleParams {
   maxYaw: number; // [rad] hard cap on |yaw|, structurally rules out spin/reverse (requirement 2.2)
 
   vehicleHalfWidth: number; // [m] half the body's widest point, for wall contact (design 6.3.5)
+  wheelTrackHalf: number; // [m] lateral distance from the centerline to each wheel's centre, for per-wheel surface lookup (design 6.13.1)
 }
 
 export interface VehicleState {

@@ -22,7 +22,7 @@ import { DEFAULT_VEHICLE_PARAMS, DEFAULT_SHIFT_PARAMS } from "./sim/vehicleParam
 import { updateGear, INITIAL_GEAR } from "./sim/shiftModel";
 import { smoothRoll, targetBodyRoll } from "./render/bodyRoll";
 import { computeAssist, cornerGripSpeed, type DriveMode } from "./sim/autopilot";
-import { surfaceAt, type SurfaceKind } from "./sim/surface";
+import { wheelSurfaceAt, type SurfaceKind } from "./sim/surface";
 import {
   KeyboardAxis,
   KeyboardBipolarAxis,
@@ -464,9 +464,13 @@ async function main() {
   let lastGripRatio = 0;
   let lastLateralAccel = 0;
   let bodyRoll = 0; // [rad] smoothed display-only body roll (design 6.8.2)
+  // Per-wheel surface (design 6.13.1, P23): the worse of the two sides for the
+  // HUD, and each side separately for the sounds and the curb roll.
   let lastSurfaceKind: SurfaceKind = "asphalt";
-  // Separate from lastSurfaceKind: surfaceAt() classifies by the vehicle's
-  // *center* position, but stepVehicle's wall stop is now offset inward by
+  let lastLeftKind: SurfaceKind = "asphalt";
+  let lastRightKind: SurfaceKind = "asphalt";
+  // Separate from lastSurfaceKind: wheelSurfaceAt() classifies by the wheels'
+  // positions, but stepVehicle's wall stop is now offset inward by
   // vehicleHalfWidth (design 6.3.5 follow-up) so the body's outer edge, not
   // its center, reaches the wall -- meaning the center often never crosses
   // into surfaceAt's own "wall" band. wallContact is the actual contact
@@ -501,7 +505,12 @@ async function main() {
       const stepSample = track.sampleAt(vehicle.s);
       // design 6.4/6.13: surface is read fresh every physics step (not once
       // per frame) so a fast pass across the road edge can't skip it.
-      const surface = surfaceAt(courseOption.kind, stepSample, vehicle.lateralOffset);
+      const surface = wheelSurfaceAt(
+        courseOption.kind,
+        stepSample,
+        vehicle.lateralOffset,
+        DEFAULT_VEHICLE_PARAMS.wheelTrackHalf,
+      );
       // design 6.14.1: the assist never bypasses the vehicle model -- its
       // output is mixed into the same VehicleInput a human's keys produce,
       // so it is subject to the same steer-rate ramp and grip limits.
@@ -546,6 +555,8 @@ async function main() {
       lastGripRatio = result.gripRatio;
       lastLateralAccel = result.lateralAccel;
       lastSurfaceKind = surface.kind;
+      lastLeftKind = surface.leftKind;
+      lastRightKind = surface.rightKind;
       lastWallContact = result.wallContact;
       accumulator -= FIXED_DT;
       simTime += FIXED_DT;
@@ -575,7 +586,7 @@ async function main() {
     if (!paused) {
       bodyRoll = smoothRoll(
         bodyRoll,
-        targetBodyRoll(lastLateralAccel, vehicle.lateralOffset, lastSurfaceKind === "curb"),
+        targetBodyRoll(lastLateralAccel, lastLeftKind === "curb", lastRightKind === "curb"),
         frameDt,
       );
     }
@@ -609,8 +620,8 @@ async function main() {
         throttle: throttle.read(),
         brake: brake.read(),
         gripRatio: lastGripRatio,
-        onCurb: lastSurfaceKind === "curb",
-        onGrass: lastSurfaceKind === "grass",
+        onCurb: lastLeftKind === "curb" || lastRightKind === "curb",
+        onGrass: lastLeftKind === "grass" || lastRightKind === "grass",
         wallContact: lastWallContact,
       });
       gauges.update(
@@ -653,7 +664,12 @@ async function main() {
                 sample.referenceSpeed,
                 cornerGripSpeed(
                   sample.curvature,
-                  surfaceAt(courseOption.kind, sample, vehicle.lateralOffset).gripFactor,
+                  wheelSurfaceAt(
+                    courseOption.kind,
+                    sample,
+                    vehicle.lateralOffset,
+                    DEFAULT_VEHICLE_PARAMS.wheelTrackHalf,
+                  ).gripFactor,
                   DEFAULT_VEHICLE_PARAMS,
                 ),
               ) * 3.6,

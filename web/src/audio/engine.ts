@@ -62,8 +62,8 @@ const WALL_LEVEL = 0.3;
 // "kin-kin", a different timbre from the brake's broadband highpass hiss. All values are
 // by-ear placeholders, tuned through real-play confirmation (not measured).
 const SQUEAL_SPEED_REF = 60; // [m/s] speed at which the pitch saturates
-const SQUEAL_MIN_HZ = 1100; // noise band centre at standstill
-const SQUEAL_MAX_HZ = 2400; // noise band centre at SQUEAL_SPEED_REF
+const SQUEAL_MIN_HZ = 1800; // noise band centre at standstill
+const SQUEAL_MAX_HZ = 3600; // noise band centre at SQUEAL_SPEED_REF
 const SQUEAL_OVERTONE_RATIO = 0.5; // overtone frequency relative to the noise band
 const SQUEAL_NOISE_LEVEL = 0.3;
 const SQUEAL_TONE_LEVEL = 0.03;
