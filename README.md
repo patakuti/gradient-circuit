@@ -54,7 +54,7 @@ Requires Node.js 18+. After `npm run dev`, open the printed URL (default `http:/
 
 ## How to play
 
-Use the arrow keys / WASD: `↑`/`W` for throttle, `↓`/`S` for brake, `←`/`A` to steer left, `→`/`D` to steer right. Steering ramps up smoothly while held and self-centers back to neutral when released. If you enter a corner too fast for its curvature, the car doesn't auto-brake — it pushes wide (understeer) instead, so brake early enough to hold your line.
+Use the arrow keys / WASD: `↑`/`W` for throttle, `↓`/`S` for brake, `←`/`A` to steer left, `→`/`D` to steer right. Steering ramps up smoothly while held and self-centers back to neutral when released. If you enter a corner too fast for its curvature, the car doesn't auto-brake — it pushes wide (understeer) instead, so brake early enough to hold your line. The body leans toward the outside of a turn under lateral G and lifts on whichever side rides a curb (chase view only; the cockpit view stays level), and the cornering-scrub sound rises in pitch with speed once you exceed the grip limit.
 
 Cycle the drive mode with the `M` key, or the "mode" dropdown at the bottom left (Manual → Assist 25% → Assist 50% → Assist 75% → Auto, looping back to Manual).
 

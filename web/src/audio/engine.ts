@@ -57,6 +57,16 @@ const GRASS_SPEED_LEVEL = 0.12; // additional level at high speed
 const GRASS_SPEED_REF = 30; // [m/s] speed at which the speed-dependent term saturates
 const WALL_LEVEL = 0.3;
 
+// Cornering scrub (design 6.11): P8's original mid-band bandpass noise at a
+// fixed level while the grip limit is exceeded, plus (P23) a pitch that rises
+// with speed. P23's shrill/tonal squeal attempts (high Q, overtone, level
+// scaled by the grip ratio) were rejected by the user in favour of the
+// original 600 Hz sound with only the speed link added.
+const CORNER_MIN_HZ = 600; // band centre at standstill (the original fixed value)
+const CORNER_MAX_HZ = 1200; // band centre at CORNER_SPEED_REF -- feel-tuned placeholder
+const CORNER_SPEED_REF = 60; // [m/s] speed at which the pitch saturates
+const CORNER_LEVEL = 0.25;
+
 function createNoiseBuffer(ctx: AudioContext): AudioBuffer {
   const length = Math.floor(ctx.sampleRate * NOISE_BUFFER_SECONDS);
   const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
@@ -85,6 +95,7 @@ export class EngineAudio {
   private engineOsc: OscillatorNode | null = null;
   private engineGain: GainNode | null = null;
   private brakeGain: GainNode | null = null;
+  private cornerFilter: BiquadFilterNode | null = null;
   private cornerGain: GainNode | null = null;
   private curbLfo: OscillatorNode | null = null;
   private curbToneGain: GainNode | null = null;
@@ -141,11 +152,12 @@ export class EngineAudio {
     this.brakeGain = brakeGain;
 
     // Cornering scrub: noise through a mid-band bandpass (distinct timbre from
-    // the brake's highpass), gain tied to the cornering grip limit.
+    // the brake's highpass); the band centre follows speed (update()), the gain
+    // follows the cornering grip limit.
     const cornerSource = createNoiseLoop(ctx, noiseBuffer);
     const cornerFilter = ctx.createBiquadFilter();
     cornerFilter.type = "bandpass";
-    cornerFilter.frequency.value = 600;
+    cornerFilter.frequency.value = CORNER_MIN_HZ;
     cornerFilter.Q.value = 0.7;
     const cornerGain = ctx.createGain();
     cornerGain.gain.value = 0;
@@ -153,6 +165,7 @@ export class EngineAudio {
     cornerFilter.connect(cornerGain);
     cornerGain.connect(masterGain);
     cornerSource.start();
+    this.cornerFilter = cornerFilter;
     this.cornerGain = cornerGain;
 
     // Curb: filtered noise (a dull thud, not the corner scrub's bandpass
@@ -225,6 +238,7 @@ export class EngineAudio {
       !this.engineOsc ||
       !this.engineGain ||
       !this.brakeGain ||
+      !this.cornerFilter ||
       !this.cornerGain ||
       !this.curbLfo ||
       !this.curbToneGain ||
@@ -250,7 +264,15 @@ export class EngineAudio {
     // on/off, so there's no click as speed crosses the threshold.
     const brakeSpeedFactor = Math.min(1, state.speed / BRAKE_SOUND_MIN_SPEED);
     this.brakeGain.gain.setTargetAtTime(state.brake * 0.2 * brakeSpeedFactor, now, PARAM_SMOOTHING_S);
-    this.cornerGain.gain.setTargetAtTime(state.gripExceeded ? 0.25 : 0, now, PARAM_SMOOTHING_S);
+
+    const cornerSpeedFrac = Math.min(1, state.speed / CORNER_SPEED_REF);
+    this.cornerFilter.frequency.setTargetAtTime(
+      CORNER_MIN_HZ + cornerSpeedFrac * (CORNER_MAX_HZ - CORNER_MIN_HZ),
+      now,
+      PARAM_SMOOTHING_S,
+    );
+    this.cornerGain.gain.setTargetAtTime(state.gripExceeded ? CORNER_LEVEL : 0, now, PARAM_SMOOTHING_S);
+
 
     this.curbLfo.frequency.setTargetAtTime(Math.max(0.5, state.speed / CURB_BUMP_PERIOD_M), now, PARAM_SMOOTHING_S);
     this.curbToneGain.gain.setTargetAtTime(state.onCurb ? CURB_BASE_LEVEL : 0, now, PARAM_SMOOTHING_S);

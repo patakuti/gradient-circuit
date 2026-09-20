@@ -51,6 +51,12 @@ export const DEFAULT_VEHICLE_PARAMS: VehicleParams = {
   // sim/ must not import render/ (design 6.1), so this can't be a shared
   // constant (same tradeoff as audio/engine.ts's CURB_BUMP_PERIOD_M).
   vehicleHalfWidth: 0.95, // m
+
+  // Per-wheel surface lookup (design 6.13.1, P23): each side's wheels sit at
+  // render/vehicleMesh.ts's REAR_WIDTH/2 + WHEEL_THICKNESS/2 = 0.8 + 0.14 =
+  // 0.94 m from the centerline. Same by-hand sync as vehicleHalfWidth above
+  // (sim/ must not import render/, design 6.1).
+  wheelTrackHalf: 0.94, // m
 };
 
 // Measured, not tuned -- `tools fit-shift` (design 4.10), 1025 clean laps

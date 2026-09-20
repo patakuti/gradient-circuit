@@ -37,6 +37,7 @@ export interface VehicleParams {
   maxYaw: number; // [rad] hard cap on |yaw|, structurally rules out spin/reverse (requirement 2.2)
 
   vehicleHalfWidth: number; // [m] half the body's widest point, for wall contact (design 6.3.5)
+  wheelTrackHalf: number; // [m] lateral distance from the centerline to each wheel's centre, for per-wheel surface lookup (design 6.13.1)
 }
 
 export interface VehicleState {
@@ -68,6 +69,8 @@ export const ASPHALT_SURFACE: SurfaceState = { gripFactor: 1, rollingFactor: 1, 
 export interface VehicleStepResult {
   state: VehicleState;
   gripExceeded: boolean; // true while the requested turn exceeds the grip limit (understeer, design 6.3.3)
+  // Display-only output (design 6.3.2/6.3.3, P23) -- never fed back into the state update.
+  lateralAccel: number; // [m/s^2] actual lateral acceleration = speed^2 * kappaCar (positive = left turn)
   wallContact: boolean; // true while the vehicle is being held at a wall boundary (design 6.3.5)
 }
 
@@ -206,6 +209,7 @@ export function stepVehicle(
     state: { s, speed: speedAfterWall, lap, lateralOffset, yaw, steer },
     gripExceeded,
     wallContact,
+    lateralAccel: speed * speed * kappaCar,
   };
 }
 
