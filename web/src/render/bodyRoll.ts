@@ -10,7 +10,7 @@
 const DEG = Math.PI / 180;
 
 // Feel-tuned placeholders, adjusted by real-play confirmation (design 6.8.2).
-const ROLL_PER_G = 1.2 * DEG; // [rad/g] lean toward the outside of the turn
+const ROLL_PER_G = 0.7 * DEG; // [rad/g] lean toward the outside of the turn
 const CURB_ROLL = 3 * DEG; // [rad] lift on the side that's on the curb
 const MAX_ROLL = 7 * DEG; // [rad] total cap
 const ROLL_TIME_CONSTANT_S = 0.1; // [s] keeps the angle from jumping on curb entry/exit

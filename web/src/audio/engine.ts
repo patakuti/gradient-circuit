@@ -57,16 +57,16 @@ const GRASS_SPEED_LEVEL = 0.12; // additional level at high speed
 const GRASS_SPEED_REF = 30; // [m/s] speed at which the speed-dependent term saturates
 const WALL_LEVEL = 0.3;
 
-// Cornering tire squeal (design 6.11, P23): a narrow high-Q noise band plus a
-// triangle-wave overtone, both rising with speed -- a shrill "kin-kin", a
-// different timbre from the brake's broadband highpass hiss. All values are
+// Cornering tire squeal (design 6.11, P23): a moderate-Q noise band plus a
+// quiet triangle-wave overtone, both rising with speed -- a rough, noisy
+// "kin-kin", a different timbre from the brake's broadband highpass hiss. All values are
 // by-ear placeholders, tuned through real-play confirmation (not measured).
 const SQUEAL_SPEED_REF = 60; // [m/s] speed at which the pitch saturates
-const SQUEAL_MIN_HZ = 1800; // noise band centre at standstill
-const SQUEAL_MAX_HZ = 3600; // noise band centre at SQUEAL_SPEED_REF
+const SQUEAL_MIN_HZ = 1100; // noise band centre at standstill
+const SQUEAL_MAX_HZ = 2400; // noise band centre at SQUEAL_SPEED_REF
 const SQUEAL_OVERTONE_RATIO = 0.5; // overtone frequency relative to the noise band
-const SQUEAL_NOISE_LEVEL = 0.22;
-const SQUEAL_TONE_LEVEL = 0.05;
+const SQUEAL_NOISE_LEVEL = 0.3;
+const SQUEAL_TONE_LEVEL = 0.03;
 // Squeal begins slightly before the grip limit and saturates a bit beyond it:
 // real tires start singing just under the limit, and a step at exactly 1.0
 // would click.
@@ -159,14 +159,14 @@ export class EngineAudio {
     brakeSource.start();
     this.brakeGain = brakeGain;
 
-    // Cornering tire squeal: high-Q bandpass noise (a narrow, singing band)
-    // plus a triangle overtone; pitch follows speed, level follows how close
+    // Cornering tire squeal: moderate-Q bandpass noise (noisy, not a pure
+    // whistle) plus a quiet triangle overtone; pitch follows speed, level follows how close
     // the demanded lateral acceleration is to the grip limit (update()).
     const squealSource = createNoiseLoop(ctx, noiseBuffer);
     const squealFilter = ctx.createBiquadFilter();
     squealFilter.type = "bandpass";
     squealFilter.frequency.value = SQUEAL_MIN_HZ;
-    squealFilter.Q.value = 8;
+    squealFilter.Q.value = 3;
     const squealNoiseGain = ctx.createGain();
     squealNoiseGain.gain.value = 0;
     squealSource.connect(squealFilter);
