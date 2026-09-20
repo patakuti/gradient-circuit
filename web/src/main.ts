@@ -20,6 +20,7 @@ import { buildScenery } from "./render/scenery";
 import { maxSteerAngleAt, resetVehicle, stepVehicle, type VehicleInput, type VehicleState } from "./sim/vehicle";
 import { DEFAULT_VEHICLE_PARAMS, DEFAULT_SHIFT_PARAMS } from "./sim/vehicleParams";
 import { updateGear, INITIAL_GEAR } from "./sim/shiftModel";
+import { smoothRoll, targetBodyRoll } from "./render/bodyRoll";
 import { computeAssist, cornerGripSpeed, type DriveMode } from "./sim/autopilot";
 import { surfaceAt, type SurfaceKind } from "./sim/surface";
 import {
@@ -460,6 +461,9 @@ async function main() {
   // frame, not an OR across every step that ran, to avoid flicker when
   // multiple steps land in one frame.
   let lastGripExceeded = false;
+  let lastGripRatio = 0;
+  let lastLateralAccel = 0;
+  let bodyRoll = 0; // [rad] smoothed display-only body roll (design 6.8.2)
   let lastSurfaceKind: SurfaceKind = "asphalt";
   // Separate from lastSurfaceKind: surfaceAt() classifies by the vehicle's
   // *center* position, but stepVehicle's wall stop is now offset inward by
@@ -539,6 +543,8 @@ async function main() {
       );
       vehicle = result.state;
       lastGripExceeded = result.gripExceeded;
+      lastGripRatio = result.gripRatio;
+      lastLateralAccel = result.lateralAccel;
       lastSurfaceKind = surface.kind;
       lastWallContact = result.wallContact;
       accumulator -= FIXED_DT;
@@ -563,6 +569,17 @@ async function main() {
       pose.position.y + pose.forward.y,
       pose.position.z + pose.forward.z,
     );
+    // design 6.8.2: body roll from curb contact and/or lateral G, applied
+    // after lookAt (which overwrites the orientation every frame). Only the
+    // mesh rolls -- the cockpit camera is deliberately left level.
+    if (!paused) {
+      bodyRoll = smoothRoll(
+        bodyRoll,
+        targetBodyRoll(lastLateralAccel, vehicle.lateralOffset, lastSurfaceKind === "curb"),
+        frameDt,
+      );
+    }
+    vehicleMesh.group.rotateZ(bodyRoll);
 
     // design 6.8.1: front wheel steer angle, display-only (doesn't feed
     // back into stepVehicle). Reuses the same function the physics model
@@ -591,7 +608,7 @@ async function main() {
         redlineRpm: DEFAULT_SHIFT_PARAMS.redlineRpm,
         throttle: throttle.read(),
         brake: brake.read(),
-        gripExceeded: lastGripExceeded,
+        gripRatio: lastGripRatio,
         onCurb: lastSurfaceKind === "curb",
         onGrass: lastSurfaceKind === "grass",
         wallContact: lastWallContact,

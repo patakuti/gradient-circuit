@@ -16,11 +16,11 @@ export interface VehicleAudioState {
   redlineRpm: number;
   throttle: number; // [0, 1]
   brake: number; // [0, 1]
-  // sim/vehicle.ts's stepVehicle() result (design 6.3.3/6.11): true while
-  // understeering (the demanded turn exceeds grip). Replaces P8's
-  // "auto-braking active" condition now that grip overshoot no longer
-  // triggers an automatic slowdown.
-  gripExceeded: boolean;
+  // sim/vehicle.ts's stepVehicle() gripRatio (design 6.3.2/6.11): the
+  // demanded lateral acceleration over the grip limit (1.0 = at the limit).
+  // Drives the tire squeal's level continuously instead of P12's on/off
+  // `gripExceeded` (P23).
+  gripRatio: number;
   // Off-course surface (design 6.13, P13 follow-up). Plain booleans rather
   // than sim/surface.ts's SurfaceKind -- this module has no sim/ import
   // (design 6.1), so main.ts derives these from surfaceAt()'s result.
@@ -57,6 +57,22 @@ const GRASS_SPEED_LEVEL = 0.12; // additional level at high speed
 const GRASS_SPEED_REF = 30; // [m/s] speed at which the speed-dependent term saturates
 const WALL_LEVEL = 0.3;
 
+// Cornering tire squeal (design 6.11, P23): a narrow high-Q noise band plus a
+// triangle-wave overtone, both rising with speed -- a shrill "kin-kin", a
+// different timbre from the brake's broadband highpass hiss. All values are
+// by-ear placeholders, tuned through real-play confirmation (not measured).
+const SQUEAL_SPEED_REF = 60; // [m/s] speed at which the pitch saturates
+const SQUEAL_MIN_HZ = 1800; // noise band centre at standstill
+const SQUEAL_MAX_HZ = 3600; // noise band centre at SQUEAL_SPEED_REF
+const SQUEAL_OVERTONE_RATIO = 0.5; // overtone frequency relative to the noise band
+const SQUEAL_NOISE_LEVEL = 0.22;
+const SQUEAL_TONE_LEVEL = 0.05;
+// Squeal begins slightly before the grip limit and saturates a bit beyond it:
+// real tires start singing just under the limit, and a step at exactly 1.0
+// would click.
+const SQUEAL_RATIO_START = 0.9;
+const SQUEAL_RATIO_FULL = 1.1;
+
 function createNoiseBuffer(ctx: AudioContext): AudioBuffer {
   const length = Math.floor(ctx.sampleRate * NOISE_BUFFER_SECONDS);
   const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
@@ -75,7 +91,7 @@ function createNoiseLoop(ctx: AudioContext, buffer: AudioBuffer): AudioBufferSou
 }
 
 /**
- * Engine/brake/cornering-scrub sound. Nodes are created once in `start()`;
+ * Engine/brake/cornering-squeal sound. Nodes are created once in `start()`;
  * `update()` only rewrites existing `AudioParam`s (design 6.11) -- no
  * per-frame node creation/teardown.
  */
@@ -85,7 +101,10 @@ export class EngineAudio {
   private engineOsc: OscillatorNode | null = null;
   private engineGain: GainNode | null = null;
   private brakeGain: GainNode | null = null;
-  private cornerGain: GainNode | null = null;
+  private squealFilter: BiquadFilterNode | null = null;
+  private squealNoiseGain: GainNode | null = null;
+  private squealOsc: OscillatorNode | null = null;
+  private squealToneGain: GainNode | null = null;
   private curbLfo: OscillatorNode | null = null;
   private curbToneGain: GainNode | null = null;
   private curbLfoGain: GainNode | null = null;
@@ -140,20 +159,33 @@ export class EngineAudio {
     brakeSource.start();
     this.brakeGain = brakeGain;
 
-    // Cornering scrub: noise through a mid-band bandpass (distinct timbre from
-    // the brake's highpass), gain tied to the cornering grip limit.
-    const cornerSource = createNoiseLoop(ctx, noiseBuffer);
-    const cornerFilter = ctx.createBiquadFilter();
-    cornerFilter.type = "bandpass";
-    cornerFilter.frequency.value = 600;
-    cornerFilter.Q.value = 0.7;
-    const cornerGain = ctx.createGain();
-    cornerGain.gain.value = 0;
-    cornerSource.connect(cornerFilter);
-    cornerFilter.connect(cornerGain);
-    cornerGain.connect(masterGain);
-    cornerSource.start();
-    this.cornerGain = cornerGain;
+    // Cornering tire squeal: high-Q bandpass noise (a narrow, singing band)
+    // plus a triangle overtone; pitch follows speed, level follows how close
+    // the demanded lateral acceleration is to the grip limit (update()).
+    const squealSource = createNoiseLoop(ctx, noiseBuffer);
+    const squealFilter = ctx.createBiquadFilter();
+    squealFilter.type = "bandpass";
+    squealFilter.frequency.value = SQUEAL_MIN_HZ;
+    squealFilter.Q.value = 8;
+    const squealNoiseGain = ctx.createGain();
+    squealNoiseGain.gain.value = 0;
+    squealSource.connect(squealFilter);
+    squealFilter.connect(squealNoiseGain);
+    squealNoiseGain.connect(masterGain);
+    squealSource.start();
+    this.squealFilter = squealFilter;
+    this.squealNoiseGain = squealNoiseGain;
+
+    const squealOsc = ctx.createOscillator();
+    squealOsc.type = "triangle";
+    squealOsc.frequency.value = SQUEAL_MIN_HZ * SQUEAL_OVERTONE_RATIO;
+    const squealToneGain = ctx.createGain();
+    squealToneGain.gain.value = 0;
+    squealOsc.connect(squealToneGain);
+    squealToneGain.connect(masterGain);
+    squealOsc.start();
+    this.squealOsc = squealOsc;
+    this.squealToneGain = squealToneGain;
 
     // Curb: filtered noise (a dull thud, not the corner scrub's bandpass
     // hiss) whose gain is tremolo'd by an LFO -- an oscillator connected
@@ -225,7 +257,10 @@ export class EngineAudio {
       !this.engineOsc ||
       !this.engineGain ||
       !this.brakeGain ||
-      !this.cornerGain ||
+      !this.squealFilter ||
+      !this.squealNoiseGain ||
+      !this.squealOsc ||
+      !this.squealToneGain ||
       !this.curbLfo ||
       !this.curbToneGain ||
       !this.curbLfoGain ||
@@ -250,7 +285,18 @@ export class EngineAudio {
     // on/off, so there's no click as speed crosses the threshold.
     const brakeSpeedFactor = Math.min(1, state.speed / BRAKE_SOUND_MIN_SPEED);
     this.brakeGain.gain.setTargetAtTime(state.brake * 0.2 * brakeSpeedFactor, now, PARAM_SMOOTHING_S);
-    this.cornerGain.gain.setTargetAtTime(state.gripExceeded ? 0.25 : 0, now, PARAM_SMOOTHING_S);
+
+    const squealSpeedFrac = Math.min(1, state.speed / SQUEAL_SPEED_REF);
+    const squealHz = SQUEAL_MIN_HZ + squealSpeedFrac * (SQUEAL_MAX_HZ - SQUEAL_MIN_HZ);
+    const squealLevel = Math.min(
+      1,
+      Math.max(0, (state.gripRatio - SQUEAL_RATIO_START) / (SQUEAL_RATIO_FULL - SQUEAL_RATIO_START)),
+    );
+    this.squealFilter.frequency.setTargetAtTime(squealHz, now, PARAM_SMOOTHING_S);
+    this.squealOsc.frequency.setTargetAtTime(squealHz * SQUEAL_OVERTONE_RATIO, now, PARAM_SMOOTHING_S);
+    this.squealNoiseGain.gain.setTargetAtTime(squealLevel * SQUEAL_NOISE_LEVEL, now, PARAM_SMOOTHING_S);
+    this.squealToneGain.gain.setTargetAtTime(squealLevel * SQUEAL_TONE_LEVEL, now, PARAM_SMOOTHING_S);
+
 
     this.curbLfo.frequency.setTargetAtTime(Math.max(0.5, state.speed / CURB_BUMP_PERIOD_M), now, PARAM_SMOOTHING_S);
     this.curbToneGain.gain.setTargetAtTime(state.onCurb ? CURB_BASE_LEVEL : 0, now, PARAM_SMOOTHING_S);

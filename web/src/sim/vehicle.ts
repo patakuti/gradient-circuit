@@ -68,6 +68,9 @@ export const ASPHALT_SURFACE: SurfaceState = { gripFactor: 1, rollingFactor: 1, 
 export interface VehicleStepResult {
   state: VehicleState;
   gripExceeded: boolean; // true while the requested turn exceeds the grip limit (understeer, design 6.3.3)
+  // Display/audio-only outputs (design 6.3.2/6.3.3, P23) -- never fed back into the state update.
+  lateralAccel: number; // [m/s^2] actual lateral acceleration = speed^2 * kappaCar (positive = left turn)
+  gripRatio: number; // [-] aDemand / aMax (1.0 = at the grip limit)
   wallContact: boolean; // true while the vehicle is being held at a wall boundary (design 6.3.5)
 }
 
@@ -206,6 +209,8 @@ export function stepVehicle(
     state: { s, speed: speedAfterWall, lap, lateralOffset, yaw, steer },
     gripExceeded,
     wallContact,
+    lateralAccel: speed * speed * kappaCar,
+    gripRatio: aDemand / aMax,
   };
 }
 
