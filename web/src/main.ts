@@ -461,7 +461,6 @@ async function main() {
   // frame, not an OR across every step that ran, to avoid flicker when
   // multiple steps land in one frame.
   let lastGripExceeded = false;
-  let lastGripRatio = 0;
   let lastLateralAccel = 0;
   let bodyRoll = 0; // [rad] smoothed display-only body roll (design 6.8.2)
   // Per-wheel surface (design 6.13.1, P23): the worse of the two sides for the
@@ -552,7 +551,6 @@ async function main() {
       );
       vehicle = result.state;
       lastGripExceeded = result.gripExceeded;
-      lastGripRatio = result.gripRatio;
       lastLateralAccel = result.lateralAccel;
       lastSurfaceKind = surface.kind;
       lastLeftKind = surface.leftKind;
@@ -619,7 +617,7 @@ async function main() {
         redlineRpm: DEFAULT_SHIFT_PARAMS.redlineRpm,
         throttle: throttle.read(),
         brake: brake.read(),
-        gripRatio: lastGripRatio,
+        gripExceeded: lastGripExceeded,
         onCurb: lastLeftKind === "curb" || lastRightKind === "curb",
         onGrass: lastLeftKind === "grass" || lastRightKind === "grass",
         wallContact: lastWallContact,
