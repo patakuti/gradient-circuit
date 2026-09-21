@@ -111,7 +111,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 There's no Play Store release — distribution relies only on standard GitHub features (Actions/Pages/Releases).
 
 - **Desktop/browser**: pushing to `main` triggers GitHub Actions (`.github/workflows/pages.yml`), which builds and deploys automatically to **[GitHub Pages](https://patakuti.github.io/gradient-circuit/)**. Publishing requires a one-time repository setting: **Settings → Pages → Source → "GitHub Actions"**. Note that GitHub Pages for a *private* repository needs a paid plan (GitHub Pro/Team/Enterprise) — on the Free plan, the repository needs to be public for Pages to serve it.
-- **Android (APK)**: pushing a tag matching `v*` triggers GitHub Actions (`.github/workflows/android-apk.yml`), which builds an unsigned debug APK and attaches it to that tag's **[GitHub Release](https://github.com/patakuti/gradient-circuit/releases)**. Since it isn't distributed through a store, installing it requires allowing "install from unknown sources" on the device.
+- **Android (APK)**: pushing a tag matching `v*` triggers GitHub Actions (`.github/workflows/android-apk.yml`), which builds an unsigned debug APK and attaches it to that tag's **[GitHub Release](https://github.com/patakuti/gradient-circuit/releases)**. Since it isn't distributed through a store, installing it requires allowing "install from unknown sources" on the device. A manual run (`workflow_dispatch`) instead saves the APK as a workflow artifact (`app-debug-apk`) without creating a Release.
 
 ### Switching courses
 
