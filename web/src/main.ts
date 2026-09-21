@@ -20,7 +20,7 @@ import { buildScenery } from "./render/scenery";
 import { maxSteerAngleAt, resetVehicle, stepVehicle, type VehicleInput, type VehicleState } from "./sim/vehicle";
 import { DEFAULT_VEHICLE_PARAMS, DEFAULT_SHIFT_PARAMS } from "./sim/vehicleParams";
 import { updateGear, INITIAL_GEAR } from "./sim/shiftModel";
-import { smoothRoll, targetBodyRoll } from "./render/bodyRoll";
+import { curbRollPivotX, smoothRoll, targetChassisRoll, targetCurbRoll } from "./render/bodyRoll";
 import { computeAssist, cornerGripSpeed, type DriveMode } from "./sim/autopilot";
 import { wheelSurfaceAt, type SurfaceKind } from "./sim/surface";
 import {
@@ -498,7 +498,10 @@ async function main() {
   // multiple steps land in one frame.
   let lastGripExceeded = false;
   let lastLateralAccel = 0;
-  let bodyRoll = 0; // [rad] smoothed display-only body roll (design 6.8.2)
+  // [rad] smoothed display-only rolls (design 6.8.2): chassis-only lean from
+  // lateral G, and whole-car tilt from riding a curb.
+  let chassisRoll = 0;
+  let curbRoll = 0;
   // Per-wheel surface (design 6.13.1, P23): the worse of the two sides for the
   // HUD, and each side separately for the sounds and the curb roll.
   let lastSurfaceKind: SurfaceKind = "asphalt";
@@ -614,17 +617,20 @@ async function main() {
       pose.position.y + pose.forward.y,
       pose.position.z + pose.forward.z,
     );
-    // design 6.8.2: body roll from curb contact and/or lateral G, applied
-    // after lookAt (which overwrites the orientation every frame). Only the
-    // mesh rolls -- the cockpit camera is deliberately left level.
+    // design 6.8.2: curb roll tilts the whole car (wheels included) around
+    // the contact line of the side that stays on the road; lateral G leans
+    // only the chassis. The curb roll is applied after lookAt (which
+    // overwrites the orientation every frame). Only the mesh rolls -- the
+    // cockpit camera is deliberately left level.
     if (!paused) {
-      bodyRoll = smoothRoll(
-        bodyRoll,
-        targetBodyRoll(lastLateralAccel, lastLeftKind === "curb", lastRightKind === "curb"),
-        frameDt,
-      );
+      chassisRoll = smoothRoll(chassisRoll, targetChassisRoll(lastLateralAccel), frameDt);
+      curbRoll = smoothRoll(curbRoll, targetCurbRoll(lastLeftKind === "curb", lastRightKind === "curb"), frameDt);
     }
-    vehicleMesh.group.rotateZ(bodyRoll);
+    const curbPivotX = curbRollPivotX(curbRoll, DEFAULT_VEHICLE_PARAMS.wheelTrackHalf);
+    vehicleMesh.group.translateX(curbPivotX);
+    vehicleMesh.group.rotateZ(curbRoll);
+    vehicleMesh.group.translateX(-curbPivotX);
+    vehicleMesh.chassisRollPivot.rotation.z = chassisRoll;
 
     // design 6.8.1: front wheel steer angle, display-only (doesn't feed
     // back into stepVehicle). Reuses the same function the physics model

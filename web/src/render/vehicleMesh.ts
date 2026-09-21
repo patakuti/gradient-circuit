@@ -131,6 +131,7 @@ export const WHEEL_RADIUS = 0.33; // exported so main.ts can convert speed to a 
 const WHEEL_THICKNESS = 0.28;
 const WHEEL_INSET_FROM_END = 0.5; // distance from the front/rear bumper to each axle
 const RIM_RADIUS = WHEEL_RADIUS * 0.55;
+const ROLL_CENTER_HEIGHT = WHEEL_RADIUS; // chassis roll axis at axle height, display-only choice (design 6.8.2)
 
 const BODY_LENGTH = NOSE_LENGTH + REAR_LENGTH;
 
@@ -148,6 +149,8 @@ const NUMBER_DECAL_MARGIN = 0.015; // clear of the nose surface to avoid z-fight
 /** Handles returned by {@link buildVehicleMesh} for the parts `main.ts` animates per frame (design 6.8.1). */
 export interface VehicleMeshHandles {
   group: THREE.Group;
+  /** Parent of every non-wheel part, at the roll center. Rotate `.rotation.z` for the lateral-G body roll (design 6.8.2). */
+  chassisRollPivot: THREE.Group;
   /** [left, right] front wheels. Rotate `.rotation.y` to the current steer angle. */
   frontSteerPivots: [THREE.Group, THREE.Group];
   /** [frontLeft, frontRight, rearLeft, rearRight]. Rotate `.rotation.x` for the rolling animation. */
@@ -251,6 +254,16 @@ function buildWheelAxle(wheelMaterial: THREE.Material, rimMaterial: THREE.Materi
 
 export function buildVehicleMesh(): VehicleMeshHandles {
   const group = new THREE.Group();
+  // Every part except the wheels sits under the chassis roll pivot, so the
+  // lateral-G lean moves only the body while the wheels stay planted
+  // (design 6.8.2, P25). The pivot is raised to the roll center and the
+  // inner group lowered back, so parts keep their ground-based coordinates.
+  const chassisRollPivot = new THREE.Group();
+  chassisRollPivot.position.y = ROLL_CENTER_HEIGHT;
+  group.add(chassisRollPivot);
+  const chassis = new THREE.Group();
+  chassis.position.y = -ROLL_CENTER_HEIGHT;
+  chassisRollPivot.add(chassis);
   const bodyMaterial = new THREE.MeshStandardMaterial({ color: BODY_COLOR });
   const secondaryMaterial = new THREE.MeshStandardMaterial({ color: SECONDARY_COLOR });
   const accentMaterial = new THREE.MeshStandardMaterial({ color: ACCENT_COLOR });
@@ -276,7 +289,7 @@ export function buildVehicleMesh(): VehicleMeshHandles {
   // header warns about -- found by taking a cockpit-view screenshot).
   nose.scale.z = NOSE_VERTICAL_SCALE;
   nose.position.set(0, GROUND_CLEARANCE + NOSE_BASE_RADIUS * NOSE_VERTICAL_SCALE, NOSE_LENGTH / 2);
-  group.add(nose);
+  chassis.add(nose);
 
   const noseTipBand = new THREE.Mesh(
     new THREE.CylinderGeometry(NOSE_TIP_RADIUS * 1.02, NOSE_TIP_RADIUS * 1.4, NOSE_LENGTH * 0.18, NOSE_RADIAL_SEGMENTS),
@@ -285,12 +298,12 @@ export function buildVehicleMesh(): VehicleMeshHandles {
   noseTipBand.rotation.x = Math.PI / 2;
   noseTipBand.scale.z = NOSE_VERTICAL_SCALE; // see the nose mesh above for why .z, not .y
   noseTipBand.position.set(0, GROUND_CLEARANCE + NOSE_BASE_RADIUS * NOSE_VERTICAL_SCALE, NOSE_LENGTH * 0.91);
-  group.add(noseTipBand);
+  chassis.add(noseTipBand);
 
-  group.add(buildNumberDecal(-1), buildNumberDecal(1));
+  chassis.add(buildNumberDecal(-1), buildNumberDecal(1));
 
   // Front wing, mounted at the nose tip.
-  group.add(
+  chassis.add(
     buildWing(
       wingMaterial,
       FRONT_WING_WIDTH,
@@ -306,7 +319,7 @@ export function buildVehicleMesh(): VehicleMeshHandles {
   // floor/diffuser strip (secondary color) topped by a tapered, rounded
   // engine cover (body color) instead of a flat two-tone box (design 6.8.1,
   // second follow-up -- see the constants above for why).
-  group.add(
+  chassis.add(
     box(secondaryMaterial, REAR_WIDTH, REAR_FLOOR_HEIGHT, REAR_LENGTH, 0, GROUND_CLEARANCE + REAR_FLOOR_HEIGHT / 2, -REAR_LENGTH / 2),
   );
   const rearCoverHeight = REAR_HEIGHT - REAR_FLOOR_HEIGHT;
@@ -337,7 +350,7 @@ export function buildVehicleMesh(): VehicleMeshHandles {
   );
   rearCover.scale.z = (REAR_LENGTH / 2) / REAR_COVER_BOTTOM_RADIUS;
   rearCover.position.set(0, GROUND_CLEARANCE + REAR_FLOOR_HEIGHT + rearCoverHeight / 2, -REAR_LENGTH / 2);
-  group.add(rearCover);
+  chassis.add(rearCover);
 
   // Side stripe on the cover's flat side panels (design 6.8.1, third
   // follow-up, user: "側面にラインを入れる"). The panel's flat distance from
@@ -347,28 +360,28 @@ export function buildVehicleMesh(): VehicleMeshHandles {
   const stripeX = stripeRadius * Math.cos(Math.PI / 4) + SIDE_STRIPE_MARGIN;
   const stripeY = GROUND_CLEARANCE + REAR_FLOOR_HEIGHT + SIDE_STRIPE_HEIGHT_FRACTION * rearCoverHeight;
   for (const x of [-stripeX, stripeX]) {
-    group.add(box(accentMaterial, SIDE_STRIPE_THICKNESS, SIDE_STRIPE_THICKNESS, REAR_LENGTH * 0.85, x, stripeY, -REAR_LENGTH / 2));
+    chassis.add(box(accentMaterial, SIDE_STRIPE_THICKNESS, SIDE_STRIPE_THICKNESS, REAR_LENGTH * 0.85, x, stripeY, -REAR_LENGTH / 2));
   }
 
   // Side pods flanking the tub, in the secondary color for the two-tone livery (design 6.8.1).
   for (const x of [-SIDE_POD_X, SIDE_POD_X]) {
-    group.add(box(secondaryMaterial, SIDE_POD_WIDTH, SIDE_POD_HEIGHT, SIDE_POD_LENGTH, x, GROUND_CLEARANCE + SIDE_POD_HEIGHT / 2, SIDE_POD_Z));
+    chassis.add(box(secondaryMaterial, SIDE_POD_WIDTH, SIDE_POD_HEIGHT, SIDE_POD_LENGTH, x, GROUND_CLEARANCE + SIDE_POD_HEIGHT / 2, SIDE_POD_Z));
   }
 
   // Mirrors, at the front of the tub.
   for (const x of [-MIRROR_X, MIRROR_X]) {
-    group.add(box(bodyMaterial, 0.03, MIRROR_STALK_HEIGHT, 0.03, x, MIRROR_Y - MIRROR_STALK_HEIGHT / 2, 0));
-    group.add(box(bodyMaterial, 0.12, 0.08, 0.03, x, MIRROR_Y, 0));
+    chassis.add(box(bodyMaterial, 0.03, MIRROR_STALK_HEIGHT, 0.03, x, MIRROR_Y - MIRROR_STALK_HEIGHT / 2, 0));
+    chassis.add(box(bodyMaterial, 0.12, 0.08, 0.03, x, MIRROR_Y, 0));
   }
 
   // Halo over the cockpit (design 6.8.1). Uses the accent color (not the
   // dark wing color) so it reads clearly against the body from a chase-view
   // distance instead of blending into the similarly-dark rear wing/struts.
-  group.add(buildHalo(accentMaterial));
+  chassis.add(buildHalo(accentMaterial));
 
   // Shark fin along the spine (design 6.8.1, second follow-up), same accent
   // color as the halo/endplates for a cohesive tri-tone livery.
-  group.add(buildFin(accentMaterial));
+  chassis.add(buildFin(accentMaterial));
 
   // Rear wing, on struts above the tail. Endplates use the accent color
   // (design 6.8.1 follow-up) so the two-tone livery has a visible accent
@@ -376,11 +389,11 @@ export function buildVehicleMesh(): VehicleMeshHandles {
   // head-on (the main plane is seen edge-on and barely visible from there).
   const wingY = GROUND_CLEARANCE + REAR_HEIGHT + REAR_WING_STRUT_HEIGHT;
   for (const x of [-0.5, 0.5]) {
-    group.add(
+    chassis.add(
       box(wingMaterial, 0.06, REAR_WING_STRUT_HEIGHT, 0.06, x, GROUND_CLEARANCE + REAR_HEIGHT + REAR_WING_STRUT_HEIGHT / 2, REAR_WING_Z),
     );
   }
-  group.add(
+  chassis.add(
     buildWing(
       wingMaterial,
       REAR_WING_WIDTH,
@@ -425,6 +438,7 @@ export function buildVehicleMesh(): VehicleMeshHandles {
 
   return {
     group,
+    chassisRollPivot,
     frontSteerPivots: [frontSteerPivots[0], frontSteerPivots[1]],
     wheelAxles: [frontAxles[0], frontAxles[1], rearAxles[0], rearAxles[1]],
   };
