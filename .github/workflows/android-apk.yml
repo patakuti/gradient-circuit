@@ -45,7 +45,10 @@ jobs:
       # installing it (rather than relying on whatever the runner image
       # happens to preinstall) keeps this from silently breaking when the
       # runner's bundled SDK version drifts, and auto-accepts licenses.
-      - uses: android-actions/setup-android@v3
+      # Must be v4: v3 defaults to `packages: "tools platform-tools"` and the
+      # legacy `tools` package no longer exists, so sdkmanager exits 1
+      # ("Failed to find package 'tools'"). v4 only installs platform-tools.
+      - uses: android-actions/setup-android@v4
 
       - name: Sync Capacitor Android project
         working-directory: web
@@ -55,6 +58,15 @@ jobs:
         working-directory: web/android
         run: ./gradlew assembleDebug --console=plain
 
+      # Manual runs (workflow_dispatch) have no tag to attach a Release to,
+      # so keep the APK as a workflow artifact instead.
+      - uses: actions/upload-artifact@v4
+        if: github.ref_type != 'tag'
+        with:
+          name: app-debug-apk
+          path: web/android/app/build/outputs/apk/debug/app-debug.apk
+
       - uses: softprops/action-gh-release@v2
+        if: github.ref_type == 'tag'
         with:
           files: web/android/app/build/outputs/apk/debug/app-debug.apk
