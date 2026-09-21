@@ -19,7 +19,11 @@ const DEG = Math.PI / 180;
 const ROLL_PER_G = 0.7 * DEG; // [rad/g] lean toward the outside of the turn
 const MAX_CHASSIS_ROLL = 5 * DEG; // [rad] cap on the lateral-G lean
 const CURB_ROLL = 3 * DEG; // [rad] lift on the side that's on the curb
-const ROLL_TIME_CONSTANT_S = 0.1; // [s] keeps the angle from jumping on curb entry/exit
+const CURB_ROLL_TIME_CONSTANT_S = 0.1; // [s] keeps the angle from jumping on curb entry/exit
+// [s] slower than the curb roll, like a real suspension: filters the few-Hz
+// lateral-G ripple the autopilot picks up from ~5 mm wiggles in the course
+// centerline, while corners keep ~99% of their lean (P26, measured).
+const CHASSIS_ROLL_TIME_CONSTANT_S = 0.2;
 const GRAVITY = 9.81; // [m/s^2] only converts lateral acceleration into g
 
 /**
@@ -53,7 +57,17 @@ export function curbRollPivotX(curbRoll: number, wheelTrackHalf: number): number
   return curbRoll > 0 ? -wheelTrackHalf : wheelTrackHalf;
 }
 
-/** Frame-rate-independent exponential approach of `current` toward `target`. */
-export function smoothRoll(current: number, target: number, dt: number): number {
-  return current + (target - current) * (1 - Math.exp(-dt / ROLL_TIME_CONSTANT_S));
+/** Frame-rate-independent smoothing of the chassis roll toward `target`. */
+export function smoothChassisRoll(current: number, target: number, dt: number): number {
+  return approach(current, target, dt, CHASSIS_ROLL_TIME_CONSTANT_S);
+}
+
+/** Frame-rate-independent smoothing of the curb roll toward `target`. */
+export function smoothCurbRoll(current: number, target: number, dt: number): number {
+  return approach(current, target, dt, CURB_ROLL_TIME_CONSTANT_S);
+}
+
+/** Exponential approach of `current` toward `target` with time constant `tau`. */
+function approach(current: number, target: number, dt: number, tau: number): number {
+  return current + (target - current) * (1 - Math.exp(-dt / tau));
 }
