@@ -103,6 +103,7 @@ export class EngineAudio {
   private grassGain: GainNode | null = null;
   private wallGain: GainNode | null = null;
   private muted = false;
+  private backgrounded = false;
 
   /**
    * Builds the audio graph and starts playback. Must be called from a
@@ -231,6 +232,20 @@ export class EngineAudio {
     this.masterGain.gain.setTargetAtTime(muted ? 0 : 1, this.ctx.currentTime, PARAM_SMOOTHING_S);
   }
 
+  /**
+   * Silences everything while the app is in the background (task switch,
+   * home, screen off, hidden tab -- design 6.11/P24). Independent of the
+   * mute state: masterGain is untouched, so a muted player stays muted on
+   * return. While backgrounded, update() must not auto-resume the context.
+   */
+  setBackgrounded(backgrounded: boolean): void {
+    if (this.backgrounded === backgrounded) return;
+    this.backgrounded = backgrounded;
+    if (!this.ctx) return;
+    if (backgrounded) void this.ctx.suspend();
+    else void this.ctx.resume();
+  }
+
   update(state: VehicleAudioState): void {
     const ctx = this.ctx;
     if (
@@ -248,6 +263,7 @@ export class EngineAudio {
     ) {
       return;
     }
+    if (this.backgrounded) return;
     if (ctx.state === "suspended") void ctx.resume();
 
     const now = ctx.currentTime;

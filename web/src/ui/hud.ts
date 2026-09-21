@@ -39,6 +39,8 @@ export interface DebugData {
   referenceSpeedKmh: number; // Infinity when the course has no reference block (design 6.9, P15)
   targetSpeedKmh: number; // min(referenceSpeed, gripSpeed) at the car's current position (design 6.9, P15)
   fps: number;
+  visibility: string; // document.visibilityState (design 6.15.8/P24, on-device verification)
+  vibration: string; // "n/a" (unsupported) / "off" / current cue kind or "idle"
 }
 
 /** `@1` courses (design 5.1) have no reference block, so referenceSpeed is
@@ -117,7 +119,7 @@ export class Hud {
         `grip: ${debug.gripExceeded ? "EXCEEDED" : "ok"}\n` +
         `reference: ${formatMaybeInfiniteKmh(debug.referenceSpeedKmh)}  ` +
         `target: ${formatMaybeInfiniteKmh(debug.targetSpeedKmh)}\n` +
-        `fps: ${debug.fps.toFixed(0)}`;
+        `fps: ${debug.fps.toFixed(0)}  visibility: ${debug.visibility}  vibration: ${debug.vibration}`;
     }
   }
 }

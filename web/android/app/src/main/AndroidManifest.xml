@@ -39,4 +39,6 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Vibration on curb/grass/wall/brake/high lateral G (design 6.15.8) -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 </manifest>

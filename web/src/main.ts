@@ -45,6 +45,7 @@ import { ChaseRig } from "./camera/chaseRig";
 import { CockpitRig } from "./camera/cockpitRig";
 import type { VehiclePose } from "./camera/types";
 import { EngineAudio } from "./audio/engine";
+import { selectVibration, Vibrator } from "./haptics/vibration";
 import { Hud } from "./ui/hud";
 import { Gauges } from "./ui/gauges";
 import {
@@ -197,6 +198,14 @@ function saveMuted(muted: boolean): void {
   saveSetting(MUTED_STORAGE_KEY, muted ? "1" : "0");
 }
 
+const VIBRATION_STORAGE_KEY = "gradient-circuit:vibration";
+function loadVibrationEnabled(): boolean {
+  return loadSetting(VIBRATION_STORAGE_KEY, "1") === "1";
+}
+function saveVibrationEnabled(enabled: boolean): void {
+  saveSetting(VIBRATION_STORAGE_KEY, enabled ? "1" : "0");
+}
+
 const DEBUG = new URLSearchParams(window.location.search).get("debug") === "1";
 // design 6.10: `?course=<id>` picks which course/<id>.json to load, same
 // query-parameter convention as `?debug=1`.
@@ -347,6 +356,24 @@ async function main() {
   const engineAudio = new EngineAudio();
   engineAudio.setMuted(loadMuted()); // takes effect once start() runs (first keydown/touchstart)
 
+  // Vibration (design 6.15.8/P24): Android/touch only, and only where the
+  // device actually has a vibrator (desktop Chrome defines navigator.vibrate
+  // too, but the IS_TOUCH_PRIMARY gate keeps it off there).
+  const vibrationSupported = IS_TOUCH_PRIMARY && Vibrator.isSupported();
+  const vibrator = new Vibrator();
+  vibrator.setEnabled(vibrationSupported && loadVibrationEnabled());
+
+  // Background silencing (design 6.11/P24): visibilitychange plus pagehide/
+  // pageshow, since which of these a Capacitor WebView fires on task switch
+  // / home / screen-off is verified on-device rather than assumed.
+  const syncBackgrounded = (hidden: boolean) => {
+    engineAudio.setBackgrounded(hidden);
+    if (hidden) vibrator.stop();
+  };
+  document.addEventListener("visibilitychange", () => syncBackgrounded(document.hidden));
+  window.addEventListener("pagehide", () => syncBackgrounded(true));
+  window.addEventListener("pageshow", () => syncBackgrounded(document.hidden));
+
   // Input axes (design 6.15.2): on a touch-primary device, steer always
   // comes from device tilt (auto mode ignores it just like keyboard steer,
   // design 6.14.5); throttle/brake come from whichever scheme is selected,
@@ -396,6 +423,15 @@ async function main() {
         },
         onCalibrate: () => tiltSensor?.calibrate(),
         onReset: doReset,
+        vibration: vibrationSupported
+          ? {
+              initialEnabled: loadVibrationEnabled(),
+              onToggle: (enabled) => {
+                vibrator.setEnabled(enabled);
+                saveVibrationEnabled(enabled);
+              },
+            }
+          : null,
         onMenuToggle: (open) => {
           paused = open;
           // The settings panel (ui/controls.ts) is vertically centered on
@@ -626,6 +662,20 @@ async function main() {
         vehicle.speed * 3.6, shift.rpm, shift.gear,
         DEFAULT_SHIFT_PARAMS.idleRpm, DEFAULT_SHIFT_PARAMS.redlineRpm,
       );
+      // design 6.15.8/P24: same last-physics-step state the sounds use.
+      vibrator.update(
+        selectVibration({
+          speed: vehicle.speed,
+          brake: brake.read(),
+          lateralAccel: lastLateralAccel,
+          onCurb: lastLeftKind === "curb" || lastRightKind === "curb",
+          onGrass: lastLeftKind === "grass" || lastRightKind === "grass",
+          wallContact: lastWallContact,
+        }),
+        now,
+      );
+    } else {
+      vibrator.stop(); // settings menu open (design 6.15.6): drive frozen, so is the buzz
     }
     hud.update(
       {
@@ -672,6 +722,8 @@ async function main() {
                 ),
               ) * 3.6,
             fps: frameDt > 0 ? 1 / frameDt : 0,
+            visibility: document.visibilityState,
+            vibration: !vibrationSupported ? "n/a" : (vibrator.current ?? "idle"),
           }
         : undefined,
     );

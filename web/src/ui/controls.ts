@@ -46,7 +46,7 @@ export interface ThrottleBrakeSchemeOption {
 /**
  * Android-only controls (design 6.15.3), bundled into one param instead of
  * growing createControls's positional-argument list further -- unlike the
- * other settings above, these six are only ever supplied together (all or
+ * other settings above, these are only ever supplied together (all or
  * none, gated by `isTouchPrimary` on the caller's side via `matchMedia`).
  */
 export interface AndroidControlsConfig {
@@ -57,6 +57,8 @@ export interface AndroidControlsConfig {
   /** Fires with `true` when the menu opens, `false` when it closes (design 6.15.6/P14 follow-up) -- lets main.ts pause the drive while the settings panel is up, vfpv-pause-menu style. */
   onMenuToggle: (open: boolean) => void;
   onReset: () => void;
+  /** Present only when the device can vibrate (design 6.15.8/P24); the row is omitted otherwise. */
+  vibration: { initialEnabled: boolean; onToggle: (enabled: boolean) => void } | null;
 }
 
 export interface Controls {
@@ -161,6 +163,20 @@ export function createControls(
     resetButton.textContent = "reset";
     resetButton.addEventListener("click", androidControls.onReset);
     root.appendChild(resetButton);
+
+    // Vibration on/off (design 6.15.8/P24), same button style as mute below.
+    const vibration = androidControls.vibration;
+    if (vibration) {
+      let vibrationEnabled = vibration.initialEnabled;
+      const vibrationButton = document.createElement("button");
+      vibrationButton.textContent = vibrationEnabled ? "vibration: on" : "vibration: off";
+      vibrationButton.addEventListener("click", () => {
+        vibrationEnabled = !vibrationEnabled;
+        vibrationButton.textContent = vibrationEnabled ? "vibration: on" : "vibration: off";
+        vibration.onToggle(vibrationEnabled);
+      });
+      root.appendChild(vibrationButton);
+    }
   }
 
   const courseRow = document.createElement("label");
