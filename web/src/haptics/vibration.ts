@@ -1,6 +1,6 @@
 /**
- * Device vibration for driving events (curb, grass, wall, brake, high
- * lateral G), via the Web Vibration API.
+ * Device vibration for driving events (curb, grass, wall, brake, grip-limit
+ * overshoot), via the Web Vibration API.
  *
  * Design ref: 02_design.md section 6.15.8. No `three`, `sim/` or `render/`
  * imports -- main.ts derives every value passed into selectVibration(),
@@ -10,13 +10,15 @@
 export interface VibrationState {
   speed: number; // [m/s]
   brake: number; // [0, 1]
-  lateralAccel: number; // [m/s^2] signed; only the magnitude is used
+  // sim/vehicle.ts's grip-limit-exceeded flag: the same condition that
+  // starts audio/engine.ts's cornering-scrub sound (design 6.15.8/P24).
+  gripExceeded: boolean;
   onCurb: boolean;
   onGrass: boolean;
   wallContact: boolean;
 }
 
-export type VibrationKind = "wall" | "curb" | "grass" | "lateralG" | "brake";
+export type VibrationKind = "wall" | "curb" | "grass" | "grip" | "brake";
 
 /** One repeating pulse: vibrate for `onMs`, pause for `offMs`. */
 export interface VibrationCue {
@@ -27,14 +29,8 @@ export interface VibrationCue {
 
 // Feel-tuned placeholders pending real-device confirmation (design 6.15.8,
 // same status as the other tuning constants in this codebase).
-const GRAVITY = 9.81; // [m/s^2] only converts lateral acceleration into g
 const BRAKE_MIN_INPUT = 0.3; // [0, 1]
 const BRAKE_MIN_SPEED = 3; // [m/s] same as audio/engine.ts's BRAKE_SOUND_MIN_SPEED
-const LATERAL_G_MIN = 3; // [g] no vibration below this
-const LATERAL_G_MAX = 6; // [g] shortest gap at/above this
-const LATERAL_ON_MS = 25;
-const LATERAL_OFF_MAX_MS = 120; // gap at LATERAL_G_MIN
-const LATERAL_OFF_MIN_MS = 40; // gap at LATERAL_G_MAX
 const CURB_ON_MS = 30;
 const CURB_MIN_OFF_MS = 30;
 const CURB_MAX_OFF_MS = 250; // caps the gap at crawl speed so one pattern never outlasts PATTERN_SPAN_MS by much
@@ -44,12 +40,13 @@ const GRASS_MIN_SPEED = 1; // [m/s] "while driving": no rumble when stopped on t
 
 const WALL_CUE: VibrationCue = { kind: "wall", onMs: 60, offMs: 20 };
 const GRASS_CUE: VibrationCue = { kind: "grass", onMs: 15, offMs: 25 };
+const GRIP_CUE: VibrationCue = { kind: "grip", onMs: 25, offMs: 60 };
 const BRAKE_CUE: VibrationCue = { kind: "brake", onMs: 20, offMs: 60 };
 
 /**
  * Picks the one cue to play. Only one vibrator exists and its amplitude
  * can't be controlled, so when several conditions hold at once the most
- * severe wins: wall > curb > grass > lateral G > brake (design 6.15.8).
+ * severe wins: wall > curb > grass > grip limit > brake (design 6.15.8).
  */
 export function selectVibration(state: VibrationState): VibrationCue | null {
   if (state.wallContact) return WALL_CUE;
@@ -59,15 +56,7 @@ export function selectVibration(state: VibrationState): VibrationCue | null {
     return { kind: "curb", onMs: CURB_ON_MS, offMs: Math.min(CURB_MAX_OFF_MS, Math.max(CURB_MIN_OFF_MS, periodMs - CURB_ON_MS)) };
   }
   if (state.onGrass && state.speed >= GRASS_MIN_SPEED) return GRASS_CUE;
-  const lateralG = Math.abs(state.lateralAccel) / GRAVITY;
-  if (lateralG >= LATERAL_G_MIN) {
-    const t = Math.min(1, (lateralG - LATERAL_G_MIN) / (LATERAL_G_MAX - LATERAL_G_MIN));
-    return {
-      kind: "lateralG",
-      onMs: LATERAL_ON_MS,
-      offMs: LATERAL_OFF_MAX_MS + t * (LATERAL_OFF_MIN_MS - LATERAL_OFF_MAX_MS),
-    };
-  }
+  if (state.gripExceeded) return GRIP_CUE;
   if (state.brake >= BRAKE_MIN_INPUT && state.speed >= BRAKE_MIN_SPEED) return BRAKE_CUE;
   return null;
 }

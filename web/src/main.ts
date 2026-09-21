@@ -667,7 +667,7 @@ async function main() {
         selectVibration({
           speed: vehicle.speed,
           brake: brake.read(),
-          lateralAccel: lastLateralAccel,
+          gripExceeded: lastGripExceeded,
           onCurb: lastLeftKind === "curb" || lastRightKind === "curb",
           onGrass: lastLeftKind === "grass" || lastRightKind === "grass",
           wallContact: lastWallContact,
