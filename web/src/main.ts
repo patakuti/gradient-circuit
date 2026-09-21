@@ -20,7 +20,7 @@ import { buildScenery } from "./render/scenery";
 import { maxSteerAngleAt, resetVehicle, stepVehicle, type VehicleInput, type VehicleState } from "./sim/vehicle";
 import { DEFAULT_VEHICLE_PARAMS, DEFAULT_SHIFT_PARAMS } from "./sim/vehicleParams";
 import { updateGear, INITIAL_GEAR } from "./sim/shiftModel";
-import { curbRollPivotX, smoothRoll, targetChassisRoll, targetCurbRoll } from "./render/bodyRoll";
+import { curbRollPivotX, smoothChassisRoll, smoothCurbRoll, targetChassisRoll, targetCurbRoll } from "./render/bodyRoll";
 import { computeAssist, cornerGripSpeed, type DriveMode } from "./sim/autopilot";
 import { wheelSurfaceAt, type SurfaceKind } from "./sim/surface";
 import {
@@ -623,8 +623,8 @@ async function main() {
     // overwrites the orientation every frame). Only the mesh rolls -- the
     // cockpit camera is deliberately left level.
     if (!paused) {
-      chassisRoll = smoothRoll(chassisRoll, targetChassisRoll(lastLateralAccel), frameDt);
-      curbRoll = smoothRoll(curbRoll, targetCurbRoll(lastLeftKind === "curb", lastRightKind === "curb"), frameDt);
+      chassisRoll = smoothChassisRoll(chassisRoll, targetChassisRoll(lastLateralAccel), frameDt);
+      curbRoll = smoothCurbRoll(curbRoll, targetCurbRoll(lastLeftKind === "curb", lastRightKind === "curb"), frameDt);
     }
     const curbPivotX = curbRollPivotX(curbRoll, DEFAULT_VEHICLE_PARAMS.wheelTrackHalf);
     vehicleMesh.group.translateX(curbPivotX);
