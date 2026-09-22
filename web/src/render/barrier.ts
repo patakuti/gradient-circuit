@@ -11,19 +11,31 @@
 
 import * as THREE from "three";
 import { add, scale } from "../sim/vec";
-import type { CourseKind } from "../course/catalog";
+import type { CourseFeature, CourseKind } from "../course/catalog";
 import { barrierOffsetAt } from "../sim/surface";
 import type { Track, TrackSample } from "../sim/track";
 import { buildStrip } from "./scenery";
 
 const BARRIER_HEIGHT_M = 1.0;
 
-function edgeAt(courseKind: CourseKind, sample: TrackSample, side: "left" | "right"): { x: number; y: number; z: number } {
+function edgeAt(
+  courseKind: CourseKind,
+  sample: TrackSample,
+  side: "left" | "right",
+  curbFeatures: CourseFeature[],
+): { x: number; y: number; z: number } {
   const sign = side === "left" ? 1 : -1;
-  return add(sample.position, scale(sample.normal, barrierOffsetAt(courseKind, sample, side) * sign));
+  return add(sample.position, scale(sample.normal, barrierOffsetAt(courseKind, sample, side, curbFeatures) * sign));
 }
 
-export function buildBarriers(track: Track, courseKind: CourseKind): THREE.Group {
+/**
+ * `features` (design 6.13.5, P27, default []): the course's `curb`-type
+ * CourseFeatures, so the barrier ribbon steps outward by the curb's width
+ * within a curb zone -- kept in sync with barrierOffsetAt() so the visible
+ * wall and the physical one never disagree (design 6.13.3).
+ */
+export function buildBarriers(track: Track, courseKind: CourseKind, features: CourseFeature[] = []): THREE.Group {
+  const curbFeatures = features.filter((f) => f.type === "curb");
   const material = new THREE.MeshStandardMaterial({
     color: 0xd6d6d6,
     roughness: 0.6,
@@ -35,8 +47,8 @@ export function buildBarriers(track: Track, courseKind: CourseKind): THREE.Group
   for (const side of ["left", "right"] as const) {
     const geometry = buildStrip(
       track,
-      (sample) => edgeAt(courseKind, sample, side),
-      (sample) => add(edgeAt(courseKind, sample, side), { x: 0, y: BARRIER_HEIGHT_M, z: 0 }),
+      (sample) => edgeAt(courseKind, sample, side, curbFeatures),
+      (sample) => add(edgeAt(courseKind, sample, side, curbFeatures), { x: 0, y: BARRIER_HEIGHT_M, z: 0 }),
     );
     group.add(new THREE.Mesh(geometry, material));
   }
