@@ -13,8 +13,9 @@ import { add, scale, lerp, vec3 } from "../sim/vec";
 import type { Vec3 } from "../sim/vec";
 import type { Track, TrackSample } from "../sim/track";
 import type { CourseFeature } from "../course/catalog";
+import { CURB_BAND } from "../sim/surface";
 import { buildStrip, createRng } from "./scenery";
-import { createWindowTexture } from "./textures";
+import { createCurbTexture, createWindowTexture } from "./textures";
 
 const BUILDING_SPACING_M = 22;
 const BUILDING_SETBACK_M = 3.0; // clear of the road edge/barrier
@@ -49,6 +50,15 @@ const BOAT_SKIP_PROBABILITY = 0.25;
 
 const CLEARANCE_CHECK_STEP_M = 3; // coarse sampling for the overlap checks below
 const CLEARANCE_MARGIN_M = 1.0;
+
+// Curb corners (design 6.12.2/6.13.5, P27). Height/tile length match
+// render/circuitScenery.ts's CURB_HEIGHT_M/CURB_TILE_M -- same physical
+// curb, same render treatment, just not worth importing a render-only
+// constant across files for. The width, by contrast, is physics-derived
+// (it's also the band stepVehicle() grips on), so it comes from
+// sim/surface.ts's CURB_BAND instead of a second hardcoded copy.
+const MONACO_CURB_HEIGHT_M = 0.05;
+const MONACO_CURB_TILE_M = 4;
 
 function inRange(s: number, feature: CourseFeature): boolean {
   return s >= feature.sStart && s < feature.sEnd;
@@ -109,6 +119,40 @@ export function buildCityScenery(track: Track, features: CourseFeature[]): THREE
   group.add(buildBuildings(track, tunnel, harbor));
   if (tunnel) group.add(buildTunnel(track, tunnel));
   if (harbor) group.add(buildHarbor(track, harbor));
+  group.add(buildMonacoCurbs(track, features));
+  return group;
+}
+
+/**
+ * Curb ribbons for the specific corners that have one in reality (design
+ * 6.13.5, P27) -- unlike render/circuitScenery.ts's `buildCurbs`, this is a
+ * handful of open partial strips (one per `curb` CourseFeature, `side`
+ * either side), not a closed ribbon around the whole course, since most of
+ * Monaco's edge is still wall-right-at-the-paved-edge (requirement 4.7.3).
+ */
+function buildMonacoCurbs(track: Track, features: CourseFeature[]): THREE.Group {
+  const group = new THREE.Group();
+  group.name = "curbs";
+  const texture = createCurbTexture();
+  const material = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.7, side: THREE.DoubleSide });
+
+  const edgeAt = (sample: TrackSample, side: "left" | "right", offset: number): Vec3 => {
+    const halfWidth = side === "left" ? sample.widthLeft : sample.widthRight;
+    const sign = side === "left" ? 1 : -1;
+    return add(sample.position, scale(sample.normal, (halfWidth + offset) * sign));
+  };
+
+  for (const feature of features.filter((f) => f.type === "curb")) {
+    const range = { sStart: feature.sStart, sEnd: feature.sEnd };
+    const sides = feature.side ? [feature.side] : (["left", "right"] as const);
+    for (const side of sides) {
+      const inner = (sample: TrackSample): Vec3 => add(edgeAt(sample, side, 0), vec3(0, MONACO_CURB_HEIGHT_M, 0));
+      const outer = (sample: TrackSample): Vec3 =>
+        add(edgeAt(sample, side, CURB_BAND.width), vec3(0, MONACO_CURB_HEIGHT_M, 0));
+      const geometry = buildStrip(track, inner, outer, range, MONACO_CURB_TILE_M);
+      group.add(new THREE.Mesh(geometry, material));
+    }
+  }
   return group;
 }
 

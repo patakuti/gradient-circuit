@@ -301,7 +301,7 @@ async function main() {
   // circuit that's a full grass-width beyond the curb/grass/trees (render/
   // circuitScenery.ts), not right next to them, so it reads as a distant
   // boundary rather than the redundant grey wall P11 removed.
-  scene.add(buildBarriers(track, courseOption.kind));
+  scene.add(buildBarriers(track, courseOption.kind, courseOption.features));
   scene.add(buildScenery(track, courseOption));
   const vehicleMesh = buildVehicleMesh();
   scene.add(vehicleMesh.group);
@@ -548,6 +548,7 @@ async function main() {
         stepSample,
         vehicle.lateralOffset,
         DEFAULT_VEHICLE_PARAMS.wheelTrackHalf,
+        courseOption.features,
       );
       // design 6.14.1: the assist never bypasses the vehicle model -- its
       // output is mixed into the same VehicleInput a human's keys produce,
@@ -723,6 +724,7 @@ async function main() {
                     sample,
                     vehicle.lateralOffset,
                     DEFAULT_VEHICLE_PARAMS.wheelTrackHalf,
+                    courseOption.features,
                   ).gripFactor,
                   DEFAULT_VEHICLE_PARAMS,
                 ),
