@@ -14,7 +14,8 @@ import { loadCourse } from "./course/loader";
 import { Track } from "./sim/track";
 import { buildTrackMesh } from "./render/trackMesh";
 import { buildBarriers } from "./render/barrier";
-import { buildEmbankment } from "./render/embankment";
+import { buildEmbankment, computeCircuitFenceAnchors } from "./render/embankment";
+import { buildTerrain } from "./render/terrain";
 import { setupEnvironment } from "./render/environment";
 import { buildVehicleMesh, WHEEL_RADIUS } from "./render/vehicleMesh";
 import { buildScenery } from "./render/scenery";
@@ -308,6 +309,27 @@ async function main() {
   // which otherwise left buildings looking like they float and the ground
   // beside curbs/walls see-through.
   scene.add(buildEmbankment(track, courseOption.kind, courseOption.features ?? [], environment.groundY));
+  // design 6.7.2 (P29): a world-space heightfield backing locations that
+  // are close in world space but far apart along s (Monaco's hairpin
+  // fold-back, the harbor's far shore) -- the s-parameterized embankment
+  // above can't reach those. Implemented since P29 but left unwired
+  // pending a decision on its visual trade-offs (see that commit); now
+  // wired in per user request (P30 second follow-up).
+  //
+  // On a circuit course (Suzuka), also feed in the barrier-line anchor
+  // points (design 6.7.1, P30 eighth follow-up) that pull this heightfield
+  // up to touch the barrier directly outside the crossover zones
+  // buildEmbankment() above already covers with its own ribbon -- a no-op
+  // ([]) on a street course (Monaco), which keeps its own separate
+  // ground-shelf-edge ribbon instead.
+  scene.add(
+    buildTerrain(
+      track,
+      environment.groundY,
+      courseOption.features ?? [],
+      computeCircuitFenceAnchors(track, courseOption.kind, courseOption.features ?? [], environment.groundY),
+    ),
+  );
   scene.add(buildScenery(track, courseOption, environment.groundY));
   const vehicleMesh = buildVehicleMesh();
   scene.add(vehicleMesh.group);

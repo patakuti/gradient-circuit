@@ -138,8 +138,15 @@ const CLEARANCE_MARGIN_M = 1.0;
 const MONACO_CURB_HEIGHT_M = 0.05;
 const MONACO_CURB_TILE_M = 4;
 
+/**
+ * `sStart > sEnd` (P30) means the range wraps past the loop's s=0 seam
+ * instead of an ordinary sStart-to-sEnd span -- see the CourseFeature doc
+ * comment (course/catalog.ts) and design 6.12.3. Every pre-P30 feature has
+ * sStart < sEnd, so this is unchanged for them.
+ */
 function inRange(s: number, feature: CourseFeature): boolean {
-  return s >= feature.sStart && s < feature.sEnd;
+  const { sStart, sEnd } = feature;
+  return sStart <= sEnd ? s >= sStart && s < sEnd : s >= sStart || s < sEnd;
 }
 
 /**
@@ -194,11 +201,11 @@ export function buildCityScenery(track: Track, features: CourseFeature[], ground
   const tunnel = features.find((f) => f.type === "tunnel");
   const harbor = features.find((f) => f.type === "harbor");
 
-  group.add(buildBuildings(track, tunnel, harbor));
+  group.add(buildBuildings(track, tunnel, harbor, features));
   if (tunnel) group.add(buildTunnel(track, tunnel));
   if (harbor) group.add(buildHarbor(track, harbor));
   group.add(buildMonacoCurbs(track, features));
-  group.add(buildStreetGround(track, harbor, features, groundY));
+  group.add(buildStreetGround(track, features, groundY));
   return group;
 }
 
@@ -235,12 +242,36 @@ function shelfCap(curvature: number, sign: number): number {
  * building-reaching extra) -- that space is water (render/cityScenery.ts's
  * `buildHarbor()`), not ground.
  */
-function buildStreetGround(
-  track: Track,
-  harbor: CourseFeature | undefined,
-  features: CourseFeature[],
-  groundY: number,
-): THREE.Group {
+/**
+ * How far out (along `normal`, unsigned) the street ground shelf reaches
+ * for this sample/side -- i.e. the outer boundary of the surface buildings
+ * actually stand on, not just the barrier line. Exported so
+ * render/embankment.ts can start its terrain-connecting cliff from this
+ * same boundary instead of the barrier (design 6.7.1, P30 fifth
+ * follow-up, user request): previously the cliff started at the barrier
+ * while this shelf's *visible* ground continued on past it (up to
+ * `GROUND_SHELF_REACH_M` further), leaving that outer strip of ground --
+ * and whatever building stands past it -- with nothing connecting it down
+ * to the terrain, i.e. still "floating" by the same P28 definition even
+ * though the barrier itself was covered.
+ */
+export function groundShelfOffset(track: Track, sample: TrackSample, side: "left" | "right", features: CourseFeature[]): number {
+  const sign = side === "left" ? 1 : -1;
+  const curbFeatures = features.filter((f) => f.type === "curb");
+  const harbor = features.find((f) => f.type === "harbor");
+  const noBuildingZones = features.filter((f) => f.type === "noBuilding");
+  const barrierOffset = barrierOffsetAt("street", sample, side, curbFeatures);
+  const isHarborWaterSide = harbor !== undefined && inRange(sample.s, harbor) && (harbor.side ?? "right") === side;
+  const isNoBuildingSide = noBuildingZones.some((f) => (f.side === undefined || f.side === side) && inRange(sample.s, f));
+  if (isHarborWaterSide || isNoBuildingSide) return barrierOffset;
+  const tightness = nearbyMaxCurvature(track, sample.s, GROUND_SHELF_TAPER_LOOKAHEAD_M);
+  const taper = taperFalloff(tightness);
+  const reach = GROUND_SHELF_REACH_M * (1 - taper);
+  const cap = shelfCap(sample.curvature, sign);
+  return Math.max(barrierOffset, Math.min(barrierOffset + reach, cap));
+}
+
+function buildStreetGround(track: Track, features: CourseFeature[], groundY: number): THREE.Group {
   const group = new THREE.Group();
   group.name = "streetGround";
   const curbFeatures = features.filter((f) => f.type === "curb");
@@ -291,17 +322,14 @@ function buildStreetGround(
     // full taper means the outer edge is both at the curb and down at
     // ground level, i.e. a wall, not a shrinking horizontal shelf.
     const outerEdge = (sample: TrackSample): Vec3 => {
-      const barrierOffset = barrierOffsetAt("street", sample, side, curbFeatures);
-      const isHarborWaterSide = harbor && inRange(sample.s, harbor) && (harbor.side ?? "right") === side;
-      if (isHarborWaterSide) {
-        return add(sample.position, scale(sample.normal, barrierOffset * sign));
-      }
+      const offset = groundShelfOffset(track, sample, side, features);
+      const point = add(sample.position, scale(sample.normal, offset * sign));
+      // Height still tapers toward `groundY` near a tight corner (see this
+      // function's header comment above) -- unrelated to the horizontal
+      // reach itself, so it stays local to this ground shelf rather than
+      // moving into `groundShelfOffset()`.
       const tightness = nearbyMaxCurvature(track, sample.s, GROUND_SHELF_TAPER_LOOKAHEAD_M);
       const taper = taperFalloff(tightness);
-      const reach = GROUND_SHELF_REACH_M * (1 - taper);
-      const cap = shelfCap(sample.curvature, sign);
-      const offset = Math.max(barrierOffset, Math.min(barrierOffset + reach, cap));
-      const point = add(sample.position, scale(sample.normal, offset * sign));
       return { x: point.x, y: sample.position.y + (groundY - sample.position.y) * taper, z: point.z };
     };
     const geometry = buildStrip(track, innerEdge, outerEdge);
@@ -347,18 +375,23 @@ function buildBuildings(
   track: Track,
   tunnel: CourseFeature | undefined,
   harbor: CourseFeature | undefined,
+  features: CourseFeature[],
 ): THREE.Group {
   const group = new THREE.Group();
   group.name = "buildings";
   const rng = createRng(1);
   const windowTexture = createWindowTexture();
   const roofAccentMaterial = new THREE.MeshStandardMaterial({ color: ROOF_ACCENT_COLOR, roughness: 0.8 });
+  const noBuildingZones = features.filter((f) => f.type === "noBuilding");
 
   for (let s = 0; s < track.length; s += BUILDING_SPACING_M) {
     const sample = track.sampleAt(s);
     for (const side of ["left", "right"] as const) {
       if (tunnel && inRange(s, tunnel)) continue; // covered by the tunnel structure
       if (harbor && inRange(s, harbor) && (harbor.side ?? "right") === side) continue; // water side only -- the inland side keeps its buildings
+      // design 6.12.3 (P30): direct user request to keep one side clear of
+      // buildings over a given stretch, independent of tunnel/harbor.
+      if (noBuildingZones.some((f) => (f.side === undefined || f.side === side) && inRange(s, f))) continue;
 
       const height = BUILDING_MIN_HEIGHT_M + rng() * (BUILDING_MAX_HEIGHT_M - BUILDING_MIN_HEIGHT_M);
       const width = BUILDING_MIN_WIDTH_M + rng() * (BUILDING_MAX_WIDTH_M - BUILDING_MIN_WIDTH_M);
