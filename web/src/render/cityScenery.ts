@@ -13,7 +13,7 @@ import { add, scale, lerp, vec3 } from "../sim/vec";
 import type { Vec3 } from "../sim/vec";
 import type { Track, TrackSample } from "../sim/track";
 import type { CourseFeature } from "../course/catalog";
-import { CURB_BAND } from "../sim/surface";
+import { CURB_BAND, barrierOffsetAt } from "../sim/surface";
 import { buildStrip, createRng } from "./scenery";
 import { createCurbTexture, createWindowTexture } from "./textures";
 
@@ -38,6 +38,84 @@ const BUILDING_PALETTE = [
 ];
 const ROOF_ACCENT_COLOR = 0xc9a888; // pale tan roof edge -- softened to match the paler wall palette above
 const ROOF_ACCENT_HEIGHT_M = 0.3;
+
+// Ground fill (design 6.7.1/6.12.3, P28 follow-up): user report "ビルが
+// 浮いて見える" persisted after P28's barrier-line embankment curtain,
+// because that curtain only closes the gap directly under the barrier's
+// own path -- the flat area further out, where buildings actually stand
+// (BUILDING_SETBACK_M plus their own footprint), still had no ground mesh
+// at all. Also colors the requested surfaces (user: "縁石とガードレールの
+// 間、ビルが立つ地面...灰色系"): a plain warm-grey pavement tone, distinct
+// from both the asphalt and the far ground plane's darker GROUND_COLOR.
+const STREET_GROUND_COLOR = 0x8f8c82;
+// How far past a building's own bounding radius the ground shelf reaches,
+// so it peeks out slightly beyond the widest building's silhouette instead
+// of stopping exactly at its edge.
+const GROUND_SHELF_MARGIN_M = 2.0;
+// Ground shelf reach beyond the barrier line (design 6.7.1 second
+// follow-up): sized for the widest possible building (BUILDING_MAX_WIDTH_M
+// / BUILDING_MAX_DEPTH_M), so the shelf comfortably reaches every placed
+// building's footprint. `buildStreetGround()` below clamps this per-sample
+// where the actual curvature can't tolerate it (Monaco's tight corners).
+const GROUND_SHELF_REACH_M =
+  BUILDING_SETBACK_M + Math.hypot(BUILDING_MAX_WIDTH_M, BUILDING_MAX_DEPTH_M) / 2 + GROUND_SHELF_MARGIN_M;
+// How much margin to keep on `1 - curvature*d` (design 6.3.3's own Frenet
+// term, dropped there for the physics but relevant here for geometry): an
+// offset curve folds on itself once this denominator reaches 0. Chosen
+// comfortably above 0, not against it, since clamping is per-sample and a
+// thin margin could still visibly wobble between samples.
+const GROUND_SHELF_SAFE_DENOM_MIN = 0.4;
+// How far ahead/behind along s to look for upcoming tight curvature when
+// deciding how far the shelf should reach (see the comment on `outerEdge`
+// in buildStreetGround()). 90m (03_plan.md P29 fourth follow-up) removed
+// the original roof-shaped overhang at the hairpin's own tightest point,
+// but a nearby, still-full-width stretch (s~1260, ~40m further along)
+// remained visible as a smaller stray sliver from a low, close-up chase
+// camera (screenshot: MonacoChase10.png) -- raised to 150m (03_plan.md P29
+// sixth follow-up) so the taper reaches far enough out from the apex to
+// cover that stretch too, verified by re-checking that same viewpoint.
+const GROUND_SHELF_TAPER_LOOKAHEAD_M = 150;
+// Below TAPER_LOW, curvature is gentle enough that the full reach is kept;
+// above TAPER_HIGH, the reach tapers to (nearly) nothing, well short of
+// `shelfCap`'s hard fold limit so the taper -- not the fold clamp -- is
+// what's normally shaping the shelf near a tight corner. An earlier, much
+// lower TAPER_LOW (0.02) tapered nearly half the course's building
+// placements away (03_plan.md P29 fifth follow-up) -- measured, Monaco has
+// 11 separate corners with curvature > 0.05 (radius < 20m), and ordinary
+// corners routinely reach curvature ~0.05-0.07 without ever needing
+// `shelfCap` to clamp them at all (that only starts binding above ~0.038
+// for the untapered reach). Only the Grand Hotel Hairpin's apex reaches
+// past 0.1 (peak 0.143, the single sharpest point on either course) --
+// TAPER_LOW/HIGH are set just above/below that peak so the taper is
+// specific to the one corner it exists for, leaving every ordinary corner
+// at full reach exactly as before this feature.
+const GROUND_SHELF_TAPER_LOW = 0.07;
+const GROUND_SHELF_TAPER_HIGH = 0.13;
+
+/** Smoothstep from 0 (curvature <= TAPER_LOW) to 1 (curvature >= TAPER_HIGH). */
+function taperFalloff(curvature: number): number {
+  const t = (curvature - GROUND_SHELF_TAPER_LOW) / (GROUND_SHELF_TAPER_HIGH - GROUND_SHELF_TAPER_LOW);
+  const clamped = Math.max(0, Math.min(1, t));
+  return clamped * clamped * (3 - 2 * clamped);
+}
+
+/** Max |curvature| within `lookaheadM` of `s` in either direction, wrapping around a closed loop. */
+function nearbyMaxCurvature(track: Track, s: number, lookaheadM: number): number {
+  const ds = track.ds;
+  let max = 0;
+  for (let ds_ = -lookaheadM; ds_ <= lookaheadM; ds_ += ds) {
+    const c = Math.abs(track.sampleAt(s + ds_).curvature);
+    if (c > max) max = c;
+  }
+  return max;
+}
+
+// Embankment cliff color for street courses (render/embankment.ts, P28
+// follow-up, user: "壁面はビルの側面と同様の淡色系"): reuses one of
+// BUILDING_PALETTE's tones so the cliff face reads as more of the same
+// pale stone as the buildings above it, not as bare dirt. Exported instead
+// of duplicated so the two files can't drift apart.
+export const EMBANKMENT_WALL_COLOR_STREET = 0xe3dbc6;
 
 const TUNNEL_WALL_MARGIN_M = 1.0;
 const TUNNEL_CEILING_HEIGHT_M = 4.5;
@@ -109,7 +187,7 @@ function clearsHarborWater(track: Track, harbor: CourseFeature, point: Vec3, rad
   return true;
 }
 
-export function buildCityScenery(track: Track, features: CourseFeature[]): THREE.Group {
+export function buildCityScenery(track: Track, features: CourseFeature[], groundY: number): THREE.Group {
   const group = new THREE.Group();
   group.name = "cityScenery";
 
@@ -120,6 +198,115 @@ export function buildCityScenery(track: Track, features: CourseFeature[]): THREE
   if (tunnel) group.add(buildTunnel(track, tunnel));
   if (harbor) group.add(buildHarbor(track, harbor));
   group.add(buildMonacoCurbs(track, features));
+  group.add(buildStreetGround(track, harbor, features, groundY));
+  return group;
+}
+
+/**
+ * The largest offset (signed by `sign`, `curvature*sign > 0` meaning
+ * further out pulls the offset curve tighter) that keeps the Frenet
+ * offset-curve denominator `1 - curvature*d` at or above
+ * `GROUND_SHELF_SAFE_DENOM_MIN` -- `Infinity` when the turn direction never
+ * folds (`curvature*sign <= 0`, the *outside* of a turn). Measured, not
+ * assumed (03_plan.md P28 second follow-up): a uniform +20m reach folds
+ * badly on Monaco's tightest corners -- e.g. denom = -2.75 at the Grand
+ * Hotel Hairpin's inside edge (s=1217) and -0.78 near Portier (s=1373).
+ */
+function shelfCap(curvature: number, sign: number): number {
+  const k = curvature * sign;
+  if (k <= 0) return Infinity;
+  return (1 - GROUND_SHELF_SAFE_DENOM_MIN) / k;
+}
+
+/**
+ * Ground fill from the curb (or paved edge, where there's no curb) out to
+ * a shelf reaching past where buildings stand (design 6.7.1, two P28
+ * follow-ups). The first follow-up gave each building its own isolated
+ * ground pad in its own local (tangent, normal) frame; that avoided
+ * self-intersection but, being one flat quad per building, left visible
+ * gaps between buildings spaced further apart than the pad's width, and
+ * -- since a straight quad edge doesn't track the road's actual curve --
+ * could drift onto the road on a bend. Both are fixed by making this one
+ * continuous strip per side (`buildStrip`, like the rest of this file's
+ * ribbons) with the outer edge clamped by `shelfCap()` above instead of a
+ * fixed reach.
+ *
+ * Within the harbor's water side, the shelf stops at the barrier (no
+ * building-reaching extra) -- that space is water (render/cityScenery.ts's
+ * `buildHarbor()`), not ground.
+ */
+function buildStreetGround(
+  track: Track,
+  harbor: CourseFeature | undefined,
+  features: CourseFeature[],
+  groundY: number,
+): THREE.Group {
+  const group = new THREE.Group();
+  group.name = "streetGround";
+  const curbFeatures = features.filter((f) => f.type === "curb");
+  const material = new THREE.MeshStandardMaterial({ color: STREET_GROUND_COLOR, roughness: 1.0, side: THREE.DoubleSide });
+
+  const inCurbZone = (s: number, side: "left" | "right"): boolean =>
+    curbFeatures.some((f) => (f.side === undefined || f.side === side) && inRange(s, f));
+
+  for (const side of ["left", "right"] as const) {
+    const sign = side === "left" ? 1 : -1;
+    const innerEdge = (sample: TrackSample): Vec3 => {
+      const halfWidth = side === "left" ? sample.widthLeft : sample.widthRight;
+      const curbWidth = inCurbZone(sample.s, side) ? CURB_BAND.width : 0;
+      return add(sample.position, scale(sample.normal, (halfWidth + curbWidth) * sign));
+    };
+    // `shelfCap` only bounds a single sample against folding *at that
+    // sample* -- a hairpin as tight as the Grand Hotel Hairpin (~7m turning
+    // radius at its apex) still forces the reach down to near the barrier
+    // right at the peak, no matter the safety margin (verified: even at
+    // zero margin the fold-radius itself caps the reach at ~7m there). What
+    // it doesn't prevent is the FULL (~20-26m) reach persisting right up
+    // until the last moment beforehand: from a low cockpit camera already
+    // deep into the tightening turn, that nearby, still-full-width shelf --
+    // correctly placed by its own local math -- ends up laterally behind
+    // and above the driving line (the road has curved back on itself
+    // faster than the shelf's own width shrinks), reading as an
+    // overhanging "roof" with a gap of open sky where the shelf hasn't
+    // caught up to shrinking yet (screenshot: MonacoChase9.png; confirmed
+    // by hiding every other mesh and raycasting -- the roof shape is this
+    // same shelf, ~7m from the camera, and the sky gap is an unobstructed
+    // view past both the shelf and the P29 terrain heightfield, not a
+    // self-intersection). `nearbyMaxCurvature` looks `GROUND_SHELF_TAPER_LOOKAHEAD_M`
+    // ahead and behind along s (not just at the current sample) so the
+    // *desired* reach itself starts shrinking well before the fold-safety
+    // clamp would otherwise force it to, giving the shelf enough track
+    // distance to taper down gradually ahead of a tight corner instead of
+    // still being full width right next to it.
+    //
+    // Narrowing the reach alone still leaves a flat plate sitting at the
+    // *road's own* height, and that plate is still what a low camera deep
+    // in the fold-back sees end-on -- narrower didn't stop it from reading
+    // as a floating slab (user: "土砂崩れみたいになっている" even after the
+    // reach taper, 03_plan.md P29 sixth follow-up). The user's own
+    // suggestion was to stop treating this as a slope that has to blend
+    // smoothly at all -- a cliff dropping away is a perfectly normal thing
+    // to see next to a hairpin. So the same taper fraction that shrinks the
+    // reach also pulls the outer edge's *height* down toward `groundY`:
+    // full taper means the outer edge is both at the curb and down at
+    // ground level, i.e. a wall, not a shrinking horizontal shelf.
+    const outerEdge = (sample: TrackSample): Vec3 => {
+      const barrierOffset = barrierOffsetAt("street", sample, side, curbFeatures);
+      const isHarborWaterSide = harbor && inRange(sample.s, harbor) && (harbor.side ?? "right") === side;
+      if (isHarborWaterSide) {
+        return add(sample.position, scale(sample.normal, barrierOffset * sign));
+      }
+      const tightness = nearbyMaxCurvature(track, sample.s, GROUND_SHELF_TAPER_LOOKAHEAD_M);
+      const taper = taperFalloff(tightness);
+      const reach = GROUND_SHELF_REACH_M * (1 - taper);
+      const cap = shelfCap(sample.curvature, sign);
+      const offset = Math.max(barrierOffset, Math.min(barrierOffset + reach, cap));
+      const point = add(sample.position, scale(sample.normal, offset * sign));
+      return { x: point.x, y: sample.position.y + (groundY - sample.position.y) * taper, z: point.z };
+    };
+    const geometry = buildStrip(track, innerEdge, outerEdge);
+    group.add(new THREE.Mesh(geometry, material));
+  }
   return group;
 }
 
@@ -191,6 +378,29 @@ function buildBuildings(
       const base = add(sample.position, scale(sample.normal, offset * sign));
       if (!clearsRoad(track, base, boundingRadius)) continue;
       if (harbor && !clearsHarborWater(track, harbor, base, boundingRadius)) continue;
+      // buildStreetGround() tapers the ground shelf's reach down near a
+      // tight corner (see its own comment) -- without this check, a
+      // building placed at its usual fixed setback would end up beyond
+      // that (now-shrunk) shelf edge and read as floating with a visible
+      // gap beneath it (found by testing the taper itself: 03_plan.md P29
+      // fourth follow-up). Skipping it here keeps every building backed by
+      // *some* ground shelf, the same guarantee `clearsRoad`/
+      // `clearsHarborWater` give against the other two failure modes.
+      const barrierOffset = barrierOffsetAt("street", sample, side);
+      const tightness = nearbyMaxCurvature(track, s, GROUND_SHELF_TAPER_LOOKAHEAD_M);
+      const shelfReach = barrierOffset + GROUND_SHELF_REACH_M * (1 - taperFalloff(tightness));
+      // Compare the building's *center* (`offset`), not its far edge
+      // (`offset + boundingRadius`), against the shelf's reach: untapered,
+      // `GROUND_SHELF_REACH_M` was only ever sized to reach a building's
+      // center plus `GROUND_SHELF_MARGIN_M` (design 6.7.1 second
+      // follow-up's own derivation), never its full far edge -- checking
+      // against the far edge made this condition fail almost everywhere,
+      // not just near tight corners (found from the user's report that
+      // buildings had nearly all disappeared; verified by a headless count
+      // showing 100% of candidates rejected, 03_plan.md P29 fifth
+      // follow-up). Matching the same tolerance the untapered shelf always
+      // had keeps this check specific to the taper's own effect.
+      if (offset > shelfReach) continue;
 
       const texture = windowTexture.clone();
       texture.repeat.set(width / BUILDING_TEXTURE_UNIT_M, height / BUILDING_TEXTURE_UNIT_M);
