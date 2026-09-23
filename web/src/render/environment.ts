@@ -8,7 +8,9 @@ import * as THREE from "three";
 import type { Track } from "../sim/track";
 
 const SKY_COLOR = 0x87ceeb;
-const GROUND_COLOR = 0x2a2f26;
+// Exported so render/embankment.ts's downward strip matches the ground
+// plane's color exactly (single source of truth, not a second copy).
+export const GROUND_COLOR = 0x2a2f26;
 const GROUND_MARGIN_M = 20.0; // how far below the lowest track point the ground plane sits
 const FOG_NEAR_FRACTION = 0.3;
 const FOG_FAR_FRACTION = 1.0;
@@ -16,10 +18,27 @@ const FOG_FAR_FRACTION = 1.0;
 export interface EnvironmentHandles {
   lights: THREE.Group;
   ground: THREE.Mesh;
+  /** Ground plane's Y, exposed so render/embankment.ts can connect the road edge down to it without a second copy of GROUND_MARGIN_M. */
+  groundY: number;
 }
 
-/** Track's horizontal extent and lowest point, used to size the ground plane. */
-function trackBounds(track: Track): { minY: number; radius: number; centerX: number; centerZ: number } {
+export interface TrackBounds {
+  minY: number;
+  radius: number;
+  centerX: number;
+  centerZ: number;
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+/**
+ * Track's horizontal extent and lowest point, used to size the ground
+ * plane. Exported so render/terrain.ts (P29) can size its heightfield grid
+ * from the same single scan instead of walking every sample a second time.
+ */
+export function trackBounds(track: Track): TrackBounds {
   let minY = Infinity;
   let minX = Infinity, maxX = -Infinity;
   let minZ = Infinity, maxZ = -Infinity;
@@ -34,7 +53,7 @@ function trackBounds(track: Track): { minY: number; radius: number; centerX: num
   const centerX = (minX + maxX) / 2;
   const centerZ = (minZ + maxZ) / 2;
   const radius = Math.max(maxX - minX, maxZ - minZ) * 0.75 + 200;
-  return { minY, radius, centerX, centerZ };
+  return { minY, radius, centerX, centerZ, minX, maxX, minZ, maxZ };
 }
 
 export function setupEnvironment(scene: THREE.Scene, track: Track): EnvironmentHandles {
@@ -54,13 +73,14 @@ export function setupEnvironment(scene: THREE.Scene, track: Track): EnvironmentH
   lights.add(hemi, sun, sun.target);
   scene.add(lights);
 
+  const groundY = bounds.minY - GROUND_MARGIN_M;
   const groundGeometry = new THREE.CircleGeometry(bounds.radius, 64);
   groundGeometry.rotateX(-Math.PI / 2);
   const groundMaterial = new THREE.MeshStandardMaterial({ color: GROUND_COLOR, roughness: 1.0 });
   const ground = new THREE.Mesh(groundGeometry, groundMaterial);
-  ground.position.set(bounds.centerX, bounds.minY - GROUND_MARGIN_M, bounds.centerZ);
+  ground.position.set(bounds.centerX, groundY, bounds.centerZ);
   ground.name = "ground";
   scene.add(ground);
 
-  return { lights, ground };
+  return { lights, ground, groundY };
 }

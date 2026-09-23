@@ -14,6 +14,7 @@ import { loadCourse } from "./course/loader";
 import { Track } from "./sim/track";
 import { buildTrackMesh } from "./render/trackMesh";
 import { buildBarriers } from "./render/barrier";
+import { buildEmbankment } from "./render/embankment";
 import { setupEnvironment } from "./render/environment";
 import { buildVehicleMesh, WHEEL_RADIUS } from "./render/vehicleMesh";
 import { buildScenery } from "./render/scenery";
@@ -293,16 +294,21 @@ async function main() {
   );
 
   const track = Track.from(course);
-  setupEnvironment(scene, track);
-  scene.add(buildTrackMesh(track));
+  const environment = setupEnvironment(scene, track);
   const courseOption = COURSE_CATALOG.find((option) => option.id === COURSE_ID) ?? COURSE_CATALOG[0];
+  scene.add(buildTrackMesh(track));
   // design 6.13.3/6.7 (P13 follow-up): the barrier is now drawn for every
   // course kind, at sim/surface.ts's barrierOffsetAt() -- for a permanent
   // circuit that's a full grass-width beyond the curb/grass/trees (render/
   // circuitScenery.ts), not right next to them, so it reads as a distant
   // boundary rather than the redundant grey wall P11 removed.
   scene.add(buildBarriers(track, courseOption.kind, courseOption.features));
-  scene.add(buildScenery(track, courseOption));
+  // design 6.7.1 (P28): closes the gap between the barrier line and the
+  // flat ground plane on courses with real elevation change (Monaco),
+  // which otherwise left buildings looking like they float and the ground
+  // beside curbs/walls see-through.
+  scene.add(buildEmbankment(track, courseOption.kind, courseOption.features ?? [], environment.groundY));
+  scene.add(buildScenery(track, courseOption, environment.groundY));
   const vehicleMesh = buildVehicleMesh();
   scene.add(vehicleMesh.group);
 

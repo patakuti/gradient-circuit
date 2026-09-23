@@ -91,11 +91,11 @@ export function createRng(seed: number): () => number {
   };
 }
 
-export function buildScenery(track: Track, course: CourseOption): THREE.Group {
+export function buildScenery(track: Track, course: CourseOption, groundY: number): THREE.Group {
   const group = new THREE.Group();
   group.name = "scenery";
   if (course.kind === "street") {
-    group.add(buildCityScenery(track, course.features ?? []));
+    group.add(buildCityScenery(track, course.features ?? [], groundY));
   } else {
     group.add(buildCircuitScenery(track));
   }
